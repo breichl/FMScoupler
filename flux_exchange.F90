@@ -499,7 +499,7 @@ module flux_exchange_mod
        mpp_clock_id, mpp_clock_begin, mpp_clock_end, mpp_sum, mpp_max, &
        CLOCK_COMPONENT, CLOCK_SUBCOMPONENT, CLOCK_ROUTINE, lowercase, &
        input_nml_file
-                    
+
   use mpp_domains_mod, only: mpp_get_compute_domain, mpp_get_compute_domains, &
                              mpp_global_sum, mpp_redistribute, operator(.EQ.)
   use mpp_domains_mod, only: mpp_get_global_domain, mpp_get_data_domain
@@ -523,6 +523,7 @@ module flux_exchange_mod
   use ice_model_mod,      only: ice_data_type, land_ice_boundary_type, &
                                 ocean_ice_boundary_type, atmos_ice_boundary_type, Ice_stock_pe
   use land_model_mod,     only: land_data_type, atmos_land_boundary_type
+  use wave_type_mod,     only: wave_data_type, atmos_wave_boundary_type
   use xgrid_mod,          only: get_ocean_model_area_elements
   use  time_manager_mod,  only: time_type
   use sat_vapor_pres_mod, only: sat_vapor_pres_init
@@ -551,6 +552,7 @@ module flux_exchange_mod
   use atm_land_ice_flux_exchange_mod, only: flux_up_to_atmos, atm_stock_integrate, send_ice_mask_sic
   use atm_land_ice_flux_exchange_mod, only: flux_atmos_to_ocean, flux_ex_arrays_dealloc
   use land_ice_flux_exchange_mod,     only: flux_land_to_ice, land_ice_flux_exchange_init
+  use atm_wave_exchange_mod,          only: atm_wave_exchange_init, atm_to_wave
   use ice_ocean_flux_exchange_mod,    only: ice_ocean_flux_exchange_init
   use ice_ocean_flux_exchange_mod,    only: flux_ocean_to_ice, flux_ocean_to_ice_finish
   use ice_ocean_flux_exchange_mod,    only: flux_ice_to_ocean, flux_ice_to_ocean_finish
@@ -574,7 +576,8 @@ module flux_exchange_mod
      flux_init_stocks,     &
      flux_ice_to_ocean_stocks,&
      flux_ocean_from_ice_stocks,&
-     send_ice_mask_sic
+     send_ice_mask_sic,&
+     atm_to_wave
 
   !-----------------------------------------------------------------------
   character(len=128) :: version = '$Id$'
@@ -603,7 +606,7 @@ module flux_exchange_mod
 
   logical :: partition_fprec_from_lprec = .FALSE.  !< option for ATM override experiments where liquid+frozen precip are combined
   !! This option will convert liquid precip to snow when t_ref is less than
-  !! tfreeze parameter                
+  !! tfreeze parameter
   real, parameter    :: tfreeze = 273.15
   logical :: scale_precip_2d = .false.
 
@@ -645,7 +648,7 @@ contains
   !! ex_gas_fluxes and ex_gas_fields arrays, although the data is not allocated yet.
   !! This is intended to be called (optionally) prior to flux_exchange_init.
   subroutine gas_exchange_init (gas_fields_atm, gas_fields_ice, gas_fluxes)
-    type(coupler_1d_bc_type), optional, pointer :: gas_fields_atm 
+    type(coupler_1d_bc_type), optional, pointer :: gas_fields_atm
       !< Pointer to a structure containing atmospheric surface variables that
       !! are used in the calculation of the atmosphere-ocean gas fluxes, as well
       !! as parameters regulating these fluxes.
@@ -687,9 +690,9 @@ contains
   !!    The longitude from file grid_spec.nc ( from field xba ) is different from the longitude from atmosphere model.
   !! \throw FATAL, "grid_spec.nc incompatible with atmosphere latitudes (see grid_spec.nc)"
   !!    The latitude from file grid_spec.nc is different from the latitude from atmosphere model.
-  subroutine flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state,&
+  subroutine flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state, Wave, &
        atmos_ice_boundary, land_ice_atmos_boundary, &
-       land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, &
+       land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, atmos_wave_boundary, &
        do_ocean, slow_ice_ocean_pelist, dt_atmos, dt_cpld )
 
     type(time_type),                   intent(in)     :: Time !< The model's current time
@@ -698,7 +701,8 @@ contains
     type(ice_data_type),               intent(inout)  :: Ice !< A derived data type to specify ice boundary data
     type(ocean_public_type),           intent(inout)  :: Ocean !< A derived data type to specify ocean boundary data
     type(ocean_state_type),            pointer        :: Ocean_state
-    ! All intent(OUT) derived types with pointer components must be 
+    type(wave_data_type),              intent(inout)  :: Wave !< A derived data type to specify wave boundary data
+    ! All intent(OUT) derived types with pointer components must be
     ! COMPLETELY allocated here and in subroutines called from here;
     ! NO pointer components should have been allocated before entry if the
     ! derived type has intent(OUT) otherwise they may be lost.
@@ -708,6 +712,8 @@ contains
     type(land_ice_boundary_type),      intent(inout) :: land_ice_boundary !< A derived data type to specify properties and fluxes passed from land to ice
     type(ice_ocean_boundary_type),     intent(inout) :: ice_ocean_boundary !< A derived data type to specify properties and fluxes passed from ice to ocean
     type(ocean_ice_boundary_type),     intent(inout) :: ocean_ice_boundary !< A derived data type to specify properties and fluxes passed from ocean to ice
+    type(atmos_wave_boundary_type),     intent(inout) :: atmos_wave_boundary
+
     logical,                           intent(in)    :: do_ocean
     integer, dimension(:),             intent(in)    :: slow_ice_ocean_pelist
     integer, optional,                 intent(in)    :: dt_atmos !< Atmosphere time step in seconds
@@ -730,7 +736,7 @@ contains
     !       ocean_tracer_flux_init is called first since it has the meaningful value to set
     !       for the input/output file names for the tracer flux values used in restarts. These
     !       values could be set in the field table, and this ordering allows this.
-    !       atmos_tracer_flux_init is called last since it will use the values set in 
+    !       atmos_tracer_flux_init is called last since it will use the values set in
     !       ocean_tracer_flux_init with the exception of atm_tr_index, which can only
     !       be meaningfully set from the atmospheric model (not from the field table)
     !
@@ -796,6 +802,7 @@ contains
     call mpp_set_current_pelist()
     call ice_ocean_flux_exchange_init(Time, Ice, Ocean, Ocean_state,ice_ocean_boundary, ocean_ice_boundary, &
          Dt_cpl, debug_stocks, do_area_weighted_flux, ex_gas_fields_ice, ex_gas_fluxes, do_ocean, slow_ice_ocean_pelist )
+    call atm_wave_exchange_init(Atm, Wave, Atmos_wave_boundary)
 
     !---- done ----
     do_init = .false.
@@ -824,12 +831,12 @@ contains
 
        if(present(Atm)) then
           ref_value = 0.0
-          call Atm_stock_pe(Atm, index=i, value=ref_value)        
+          call Atm_stock_pe(Atm, index=i, value=ref_value)
           if(i==ISTOCK_WATER .and. Atm%pe ) then
              ! decrease the Atm stock by the precip adjustment to reflect the fact that
              ! after an update_atmos_up call, the precip will be that of the future time step.
-             ! Thus, the stock call will represent the (explicit ) precip at 
-             ! the beginning of the preceding time step, and the (implicit) evap at the 
+             ! Thus, the stock call will represent the (explicit ) precip at
+             ! the beginning of the preceding time step, and the (implicit) evap at the
              ! end of the preceding time step
              call atm_stock_integrate(Atm, ATM_PRECIP_NEW)
              ref_value = ref_value + ATM_PRECIP_NEW
@@ -878,10 +885,10 @@ contains
     integer :: i
 
     stocks_file=stdout()
-    ! Divert output file for stocks if requested 
+    ! Divert output file for stocks if requested
     if(mpp_pe()==mpp_root_pe() .and. divert_stocks_report) then
        call mpp_open( stocks_file, 'stocks.out', action=MPP_OVERWR, threading=MPP_SINGLE, &
-            fileset=MPP_SINGLE, nohdrs=.TRUE. )       
+            fileset=MPP_SINGLE, nohdrs=.TRUE. )
     endif
 
     ! Initialize stock values

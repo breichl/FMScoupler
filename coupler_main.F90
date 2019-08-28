@@ -386,6 +386,9 @@ program coupler_main
   use ocean_model_mod,         only: ocean_model_restart
   use ocean_model_mod,         only: ocean_public_type_chksum, ice_ocn_bnd_type_chksum
 
+  use wave_type_mod, only: wave_data_type, atmos_wave_boundary_type
+  use wave_model_mod, only: wave_model_init, update_wave_model, wave_model_end
+
   use combined_ice_ocean_driver, only: update_slow_ice_and_ocean, ice_ocean_driver_type
   use combined_ice_ocean_driver, only: ice_ocean_driver_init, ice_ocean_driver_end
 !
@@ -400,6 +403,7 @@ program coupler_main
   use flux_exchange_mod,       only: flux_check_stocks, flux_init_stocks
   use flux_exchange_mod,       only: flux_ocean_from_ice_stocks, flux_ice_to_ocean_stocks
   use flux_exchange_mod,       only: flux_atmos_to_ocean, flux_ex_arrays_dealloc
+  use flux_exchange_mod,       only: atm_to_wave
 
   use atmos_tracer_driver_mod, only: atmos_tracer_driver_gather_data
 
@@ -430,12 +434,14 @@ program coupler_main
   type (atmos_data_type) :: Atm
   type  (land_data_type) :: Land
   type   (ice_data_type) :: Ice
+  type  (wave_data_type) :: Wave
   ! allow members of ocean type to be aliased (ap)
   type (ocean_public_type), target :: Ocean
   type (ocean_state_type),  pointer :: Ocean_state => NULL()
 
   type(atmos_land_boundary_type)     :: Atmos_land_boundary
   type(atmos_ice_boundary_type)      :: Atmos_ice_boundary
+  type(atmos_wave_boundary_type)     :: Atmos_wave_boundary
   type(land_ice_atmos_boundary_type) :: Land_ice_atmos_boundary
   type(land_ice_boundary_type)       :: Land_ice_boundary
   type(ice_ocean_boundary_type)      :: Ice_ocean_boundary
@@ -447,7 +453,7 @@ program coupler_main
 
   type (time_type) :: Time, Time_init, Time_end, &
                       Time_step_atmos, Time_step_cpld
-  type(time_type) :: Time_atmos, Time_ocean
+  type(time_type) :: Time_atmos, Time_ocean, Time_waves
   type(time_type) :: Time_flux_ice_to_ocean, Time_flux_ocean_to_ice
 
   integer :: num_atmos_calls, na
@@ -493,6 +499,7 @@ program coupler_main
   integer :: ocean_npes=0 !< The number of MPI tasks to use for the ocean
   integer :: ice_npes=0   !< The number of MPI tasks to use for the ice
   integer :: land_npes=0  !< The number of MPI tasks to use for the land
+  integer :: waves_npes=0 !< The number of MPI tasks to use for the waves
   integer :: atmos_nthreads=1 !< Number of OpenMP threads to use in the atmosphere
   integer :: ocean_nthreads=1 !< Number of OpenMP threads to use in the ocean
   integer :: radiation_nthreads=1 !< Number of threads to use for the radiation.
@@ -503,6 +510,7 @@ program coupler_main
   logical :: do_ice =.true.  !< See do_atmos
   logical :: do_ocean=.true. !< See do_atmos
   logical :: do_flux =.true. !< See do_atmos
+  logical :: do_waves =.true.!< See do_atmos
   logical :: concurrent=.FALSE. !< If .TRUE., the ocean executes concurrently with the atmosphere-land-ice on a separate
                                 !! set of PEs.  Concurrent should be .TRUE. if concurrent_ice is .TRUE.
                                 !! If .FALSE., the execution is serial: call atmos... followed by call ocean...
@@ -534,8 +542,8 @@ program coupler_main
 
   namelist /coupler_nml/ current_date, calendar, force_date_from_namelist,         &
                          months, days, hours, minutes, seconds, dt_cpld, dt_atmos, &
-                         do_atmos, do_land, do_ice, do_ocean, do_flux,             &
-                         atmos_npes, ocean_npes, ice_npes, land_npes,              &
+                         do_atmos, do_land, do_ice, do_ocean, do_flux, do_waves,   &
+                         atmos_npes, ocean_npes, ice_npes, land_npes, waves_npes,  &
                          atmos_nthreads, ocean_nthreads, radiation_nthreads,       &
                          concurrent, do_concurrent_radiation, use_lag_fluxes,      &
                          check_stocks, restart_interval, do_debug, do_chksum,      &
@@ -549,10 +557,10 @@ program coupler_main
   integer :: newClock6f, newClock6s, newClock6e, newClock10f, newClock10s, newClock10e
   integer :: newClock8, newClock9, newClock11, newClock12, newClock13, newClock14, newClocka
   integer :: newClockb, newClockc, newClockd, newClocke, newClockf, newClockg, newClockh, newClocki
-  integer :: newClockj, newClockk, newClockl
+  integer :: newClockj, newClockk, newClockl, newClock_wv
 
   integer :: id_atmos_model_init, id_land_model_init, id_ice_model_init
-  integer :: id_ocean_model_init, id_flux_exchange_init
+  integer :: id_ocean_model_init, id_flux_exchange_init, id_wave_model_init
 
   character(len=80) :: text
   character(len=48), parameter                    :: mod_name = 'coupler_main_mod'
@@ -675,6 +683,10 @@ program coupler_main
   if (Ocean%is_ocean_pe) then
     call mpp_set_current_pelist(Ocean%pelist)
     newClock12 = mpp_clock_id( 'OCN' )
+  endif
+  if (Wave%pe) then
+    call mpp_set_current_pelist(Wave%pelist)
+    newClock_wv = mpp_clock_id( 'WAV' )
   endif
   call mpp_set_current_pelist()
   newClock4 = mpp_clock_id( 'flux_check_stocks' )
@@ -817,6 +829,7 @@ program coupler_main
                Atm, Land, Ice, Land_ice_atmos_boundary )
           if (do_chksum)  call atmos_ice_land_chksum('sfc+', (nc-1)*num_atmos_calls+na, Atm, Land, Ice, &
                  Land_ice_atmos_boundary, Atmos_ice_boundary, Atmos_land_boundary)
+          call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
           call mpp_clock_end(newClockb)
         endif
 
@@ -824,7 +837,7 @@ program coupler_main
 !$OMP&    NUM_THREADS(conc_nthreads)  &
 !$OMP&    DEFAULT(NONE)  &
 !$OMP&    PRIVATE(conc_nthreads) &
-!$OMP&    SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes) &
+!$OMP&    SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes, waves_npes) &
 !$OMP&    SHARED(Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary, Atmos_land_boundary, Atmos_ice_boundary) &
 !$OMP&    SHARED(Ocean_ice_boundary) &
 !$OMP&    SHARED(do_debug, do_chksum, do_atmos, do_land, do_ice, do_concurrent_radiation, omp_sec, imb_sec) &
@@ -834,11 +847,11 @@ program coupler_main
 !$OMP&      NUM_THREADS(1) &
 !$OMP&      DEFAULT(NONE) &
 !$OMP&      PRIVATE(dsec) &
-!$OMP&      SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes) &
+!$OMP&      SHARED(atmos_nthreads, radiation_nthreads, nc, na, num_atmos_calls, atmos_npes, land_npes, ice_npes, waves_npes) &
 !$OMP&      SHARED(Time_atmos, Atm, Land, Ice, Land_ice_atmos_boundary, Atmos_land_boundary, Atmos_ice_boundary) &
 !$OMP&      SHARED(Ocean_ice_boundary) &
 !$OMP&      SHARED(do_debug, do_chksum, do_atmos, do_land, do_ice, do_concurrent_radiation, omp_sec, imb_sec) &
-!$OMP&      SHARED(newClockc, newClockd, newClocke, newClockf, newClockg, newClockh, newClocki, newClockj, newClockl) 
+!$OMP&      SHARED(newClockc, newClockd, newClocke, newClockf, newClockg, newClockh, newClocki, newClockj, newClockl)
 !$        call omp_set_num_threads(atmos_nthreads)
 !$        dsec=omp_get_wtime()
           if (do_concurrent_radiation) call mpp_clock_begin(newClocki)
@@ -1002,7 +1015,7 @@ program coupler_main
 
     if(Atm%pe) then
      call mpp_clock_begin(newClock5) !Ice is still using ATM pelist and need to be included in ATM clock
-                                        !ATM clock is used for load-balancing the coupled models 
+                                        !ATM clock is used for load-balancing the coupled models
     endif
     if (do_ice .and. Ice%pe) then
 
@@ -1075,12 +1088,12 @@ program coupler_main
         call update_slow_ice_and_ocean(ice_ocean_driver_CS, Ice, Ocean_state, Ocean, &
                       Ice_ocean_boundary, Time_ocean, Time_step_cpld )
       else
-      if (do_chksum) call ocean_chksum('update_ocean_model-', nc, Ocean, Ice_ocean_boundary)
-      ! update_ocean_model since fluxes don't change here
+        if (do_chksum) call ocean_chksum('update_ocean_model-', nc, Ocean, Ice_ocean_boundary)
+        ! update_ocean_model since fluxes don't change here
 
-      if (do_ocean) &
-        call update_ocean_model( Ice_ocean_boundary, Ocean_state,  Ocean, &
-                                 Time_ocean, Time_step_cpld )
+        if (do_ocean) &
+          call update_ocean_model( Ice_ocean_boundary, Ocean_state,  Ocean, &
+                                   Time_ocean, Time_step_cpld )
       endif
 
       if (do_chksum) call ocean_chksum('update_ocean_model+', nc, Ocean, Ice_ocean_boundary)
@@ -1093,6 +1106,19 @@ program coupler_main
       Time = Time_ocean
 
       call mpp_clock_end(newClock12)
+    endif
+
+    if (Wave%pe) then
+      call mpp_set_current_pelist(Wave%pelist)
+      call mpp_clock_begin(newClock_wv)
+
+      if (do_waves)  call update_wave_model(Atmos_wave_boundary, Wave, Time_waves, Time_step_cpld )
+
+
+      Time_waves = Time_waves +  Time_step_cpld
+      Time = Time_waves
+
+      call mpp_clock_end(newClock_wv)
     endif
 
     !--- write out intermediate restart file when needed.
@@ -1183,10 +1209,11 @@ contains
     character(len=9) :: month
     integer :: pe, npes
 
-    integer :: ens_siz(6), ensemble_size
+    integer :: ens_siz(7), ensemble_size
 
     integer :: atmos_pe_start=0, atmos_pe_end=0, &
-               ocean_pe_start=0, ocean_pe_end=0
+               ocean_pe_start=0, ocean_pe_end=0, &
+               waves_pe_start=0, waves_pe_end=0
     integer :: n
     integer :: diag_model_subset=DIAG_ALL
     logical :: other_fields_exist
@@ -1342,22 +1369,28 @@ contains
 
     !Check for the consistency of PE counts
     if (concurrent) then
-!atmos_npes + ocean_npes must equal npes
+      !atmos_npes + ocean_npes must equal npes
+      !-> BGR what is the best way to do this with 3?
+      !   for now, I will disable concurrent coupling
+
+      if (do_waves) call mpp_error(FATAL, 'Concurrent coupling not working with waves yet.')
+
       if (atmos_npes.EQ.0 ) atmos_npes = npes - ocean_npes
       if (ocean_npes.EQ.0 ) ocean_npes = npes - atmos_npes
-!both must now be non-zero
+      !both must now be non-zero
       if (atmos_npes.EQ.0 .OR. ocean_npes.EQ.0 ) &
-        call mpp_error( FATAL, 'coupler_init: atmos_npes or ocean_npes must be specified for concurrent coupling.' )
+           call mpp_error( FATAL, 'coupler_init: atmos_npes or ocean_npes must be specified for concurrent coupling.' )
       if (atmos_npes+ocean_npes.NE.npes ) &
-        call mpp_error( FATAL, 'coupler_init: atmos_npes+ocean_npes must equal npes for concurrent coupling.' )
+           call mpp_error( FATAL, 'coupler_init: atmos_npes+ocean_npes must equal npes for concurrent coupling.' )
     else                        !serial timestepping
       if ((atmos_npes.EQ.0) .and. (do_atmos .or. do_land .or. do_ice)) atmos_npes = npes
       if ((ocean_npes.EQ.0) .and. (do_ocean)) ocean_npes = npes
-      if (max(atmos_npes,ocean_npes).EQ.npes) then !overlapping pelists
+      if ((waves_npes.EQ.0) .and. (do_waves)) waves_npes = npes
+      if (max(atmos_npes,ocean_npes,waves_npes).EQ.npes) then !overlapping pelists
         ! do nothing
       else                    !disjoint pelists
-        if (atmos_npes+ocean_npes.NE.npes ) call mpp_error( FATAL,  &
-             'coupler_init: atmos_npes+ocean_npes must equal npes for serial coupling on disjoint pelists.' )
+        if (atmos_npes+ocean_npes+waves_npes.NE.npes ) call mpp_error( FATAL,  &
+             'coupler_init: atmos_npes+ocean_npes+waves_npes must equal npes for serial coupling on disjoint pelists.' )
       endif
     endif
 
@@ -1369,12 +1402,13 @@ contains
 
     allocate( Atm%pelist  (atmos_npes) )
     allocate( Ocean%pelist(ocean_npes) )
+    allocate( Wave%pelist (waves_npes) )
     allocate( Land%pelist (land_npes) )
     allocate( Ice%fast_pelist(ice_npes) )
 
     !Set up and declare all the needed pelists
-    call ensemble_pelist_setup(concurrent, atmos_npes, ocean_npes, land_npes, ice_npes, &
-                               Atm%pelist, Ocean%pelist, Land%pelist, Ice%fast_pelist)
+    call ensemble_pelist_setup(concurrent, atmos_npes, ocean_npes, land_npes, ice_npes, waves_npes, &
+                               Atm%pelist, Ocean%pelist, Land%pelist, Ice%fast_pelist, Wave%pelist)
 
 !set up affinities based on threads
 
@@ -1386,6 +1420,7 @@ contains
     Atm%pe            = ANY(Atm%pelist   .EQ. mpp_pe())
     Ocean%is_ocean_pe = ANY(Ocean%pelist .EQ. mpp_pe())
     Land%pe           = ANY(Land%pelist  .EQ. mpp_pe())
+    Wave%pe           = ANY(Wave%pelist  .EQ. mpp_pe())
 
     Ice%shared_slow_fast_PEs = .not.slow_ice_with_ocean
     ! This is where different settings would be applied if the fast and slow
@@ -1508,6 +1543,10 @@ contains
       call mpp_set_current_pelist(Ocean%pelist)
       id_ocean_model_init = mpp_clock_id( '  Init: ocean_model_init ' )
     endif
+    if (Wave%pe) then
+      call mpp_set_current_pelist(Wave%pelist)
+      id_wave_model_init = mpp_clock_id( '  Init: wave_model_init ' )
+    endif
     call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
     id_flux_exchange_init = mpp_clock_id( '  Init: flux_exchange_init' )
 
@@ -1535,7 +1574,15 @@ contains
       write( text,'(a,2i6,a,i2.2)' )'Ice PE range: ', Ice%pelist(1), Ice%pelist(ice_npes), &
            ' ens_', ensemble_id
       call mpp_error( NOTE, 'coupler_init: '//trim(text) )
-
+      if (waves_npes .gt. 0) then
+        write( text,'(a,2i6,a,i2.2)' )'Wave PE range: ', Wave%pelist(1), Wave%pelist(waves_npes), &
+             ' ens_', ensemble_id
+        call mpp_error( NOTE, 'coupler_init: '//trim(text) )
+      else
+        write( text,'(a,i2.2)' )'Wave PE range is not set (do_waves=.false.) for ens_', &
+              ensemble_id
+        call mpp_error( NOTE, 'coupler_init: '//trim(text) )
+      endif
       if (concurrent) then
         call mpp_error( NOTE, 'coupler_init: Running with CONCURRENT coupling.' )
 
@@ -1591,6 +1638,9 @@ contains
       ! does not work if the ice is on the ocean PEs.
       if ((ocean_npes /= npes) .and. .not.slow_ice_with_ocean) &
         diag_model_subset = DIAG_OCEAN  ! change diag_model_subset from DIAG_ALL
+    elseif (Wave%pe) then
+      call mpp_set_current_pelist(Wave%pelist)
+      ! Do I need to set up a DIAG manager?  WW3 has its own diagnostics...
     endif
     if ( mpp_pe() == mpp_root_pe()) then
       call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
@@ -1788,6 +1838,25 @@ contains
       call data_override_init(Land_domainUG_in = Land%ug_domain)
 #endif
     endif
+!---- wave ----------
+    if (Wave%pe) then
+      call mpp_set_current_pelist(Wave%pelist)
+      if (mpp_pe().EQ.mpp_root_pe()) then
+        call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
+        write(errunit,*) 'Starting to initialize wave model at '&
+                         //trim(walldate)//' '//trim(walltime)
+      endif
+      call mpp_clock_begin(id_wave_model_init)
+      call wave_model_init(Atmos_Wave_Boundary, Wave)
+      call mpp_clock_end(id_wave_model_init)
+      if (mpp_pe().EQ.mpp_root_pe()) then
+        call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
+        write(errunit,*) 'Finished initializing wave model at '&
+                         //trim(walldate)//' '//trim(walltime)
+      endif
+      call print_memuse_stats( 'wave_model_init' )
+      call data_override_init(Wave_domain_in = Wave%domain)
+    endif
 !---- ice -----------
     if (Ice%pe) then  ! This occurs for all fast or slow ice PEs.
       if (Ice%fast_ice_pe) then
@@ -1842,7 +1911,7 @@ contains
 !$      call omp_set_num_threads(ocean_nthreads)
         call mpp_set_current_pelist( Ocean%pelist )
 !$      base_cpu = get_cpu_affinity()
-!$OMP PARALLEL private(adder)    
+!$OMP PARALLEL private(adder)
 !$      if (use_hyper_thread) then
 !$        if (mod(omp_get_thread_num(),2) == 0) then
 !$          adder = omp_get_thread_num()/2
@@ -1857,7 +1926,7 @@ contains
 !$        write(6,*) " ocean  ", get_cpu_affinity(), adder, omp_get_thread_num()
 !$        call flush(6)
 !$      endif
-!$OMP END PARALLEL  
+!$OMP END PARALLEL
       else
         ocean_nthreads = atmos_nthreads
 !$      call omp_set_num_threads(ocean_nthreads)
@@ -1897,6 +1966,7 @@ contains
     call mpp_broadcast_domain(Ice%domain)
     call mpp_broadcast_domain(Ice%slow_domain_NH)
     call mpp_broadcast_domain(Ocean%domain)
+    call mpp_broadcast_domain(Wave%domain)
 !-----------------------------------------------------------------------
 !---- initialize flux exchange module ----
     if (mpp_pe().EQ.mpp_root_pe()) then
@@ -1905,9 +1975,9 @@ contains
                        //trim(walldate)//' '//trim(walltime)
     endif
     call mpp_clock_begin(id_flux_exchange_init)
-    call flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state,&
+    call flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state, Wave, &
              atmos_ice_boundary, land_ice_atmos_boundary, &
-             land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, &
+             land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, atmos_wave_boundary, &
          do_ocean, slow_ice_ocean_pelist, dt_atmos=dt_atmos, dt_cpld=dt_cpld)
     call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
     call mpp_clock_end(id_flux_exchange_init)
@@ -1920,6 +1990,7 @@ contains
 
     Time_atmos = Time
     Time_ocean = Time
+    Time_waves = Time
 
 !
 !       read in extra fields for the air-sea gas fluxes
@@ -2029,6 +2100,10 @@ contains
 !the call to fms_io_exit has been moved here
 !this will work for serial code or concurrent (disjoint pelists)
 !but will fail on overlapping but unequal pelists
+    if (Wave%pe) then
+      call mpp_set_current_pelist(Wave%pelist)
+      call wave_model_end (Wave)
+    endif
     if (Ocean%is_ocean_pe) then
       call mpp_set_current_pelist(Ocean%pelist)
       call ocean_model_end (Ocean, Ocean_state, Time)
