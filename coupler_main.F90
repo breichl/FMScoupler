@@ -386,7 +386,7 @@ program coupler_main
   use ocean_model_mod,         only: ocean_model_restart
   use ocean_model_mod,         only: ocean_public_type_chksum, ice_ocn_bnd_type_chksum
 
-  use wave_type_mod, only: wave_data_type, atmos_wave_boundary_type
+  use wave_type_mod, only: wave_data_type, atmos_wave_boundary_type, ice_wave_boundary_type
   use wave_model_mod, only: wave_model_init, update_wave_model, wave_model_end
 
   use combined_ice_ocean_driver, only: update_slow_ice_and_ocean, ice_ocean_driver_type
@@ -403,7 +403,7 @@ program coupler_main
   use flux_exchange_mod,       only: flux_check_stocks, flux_init_stocks
   use flux_exchange_mod,       only: flux_ocean_from_ice_stocks, flux_ice_to_ocean_stocks
   use flux_exchange_mod,       only: flux_atmos_to_ocean, flux_ex_arrays_dealloc
-  use flux_exchange_mod,       only: atm_to_wave
+  use flux_exchange_mod,       only: atm_to_wave, ice_to_wave
 
   use atmos_tracer_driver_mod, only: atmos_tracer_driver_gather_data
 
@@ -446,6 +446,7 @@ program coupler_main
   type(land_ice_boundary_type)       :: Land_ice_boundary
   type(ice_ocean_boundary_type)      :: Ice_ocean_boundary
   type(ocean_ice_boundary_type)      :: Ocean_ice_boundary
+  type(ice_wave_boundary_type)       :: Ice_wave_boundary
   type(ice_ocean_driver_type), pointer :: ice_ocean_driver_CS => NULL()
 
 !-----------------------------------------------------------------------
@@ -728,7 +729,7 @@ program coupler_main
       ! Update Ice_ocean_boundary; the first iteration is supplied by restarts
       if (use_lag_fluxes) then
         call mpp_clock_begin(newClock3)
-        call flux_ice_to_ocean( Time, Ice, Ocean, Ice_ocean_boundary )
+        call flux_ice_to_ocean( Time, Ice, Ocean, Ice_ocean_boundary, ice_wave_boundary )
         Time_flux_ice_to_ocean = Time
         call mpp_clock_end(newClock3)
       endif
@@ -829,7 +830,9 @@ program coupler_main
                Atm, Land, Ice, Land_ice_atmos_boundary )
           if (do_chksum)  call atmos_ice_land_chksum('sfc+', (nc-1)*num_atmos_calls+na, Atm, Land, Ice, &
                  Land_ice_atmos_boundary, Atmos_ice_boundary, Atmos_land_boundary)
-          call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
+          if (do_waves) call atm_to_wave(Time_atmos, Atm, Wave, Atmos_wave_boundary)
+          if (do_waves) call ice_to_wave(Time_atmos, Ice, Wave, Ice_wave_boundary)
+
           call mpp_clock_end(newClockb)
         endif
 
@@ -1070,7 +1073,7 @@ program coupler_main
         ! If the slow ice is on a subset of the ocean PEs, use the ocean PElist.
         call mpp_set_current_pelist(slow_ice_ocean_pelist)
         call mpp_clock_begin(newClock3)
-        call flux_ice_to_ocean( Time, Ice, Ocean, Ice_ocean_boundary )
+        call flux_ice_to_ocean( Time, Ice, Ocean, Ice_ocean_boundary, ice_wave_boundary )
         Time_flux_ice_to_ocean = Time
         call mpp_clock_end(newClock3)
       endif
@@ -1112,7 +1115,7 @@ program coupler_main
       call mpp_set_current_pelist(Wave%pelist)
       call mpp_clock_begin(newClock_wv)
 
-      if (do_waves)  call update_wave_model(Atmos_wave_boundary, Wave, Time_waves, Time_step_cpld )
+      if (do_waves)  call update_wave_model(Atmos_wave_boundary, Ice_wave_boundary, Wave, Time_waves, Time_step_cpld )
 
 
       Time_waves = Time_waves +  Time_step_cpld
@@ -1847,7 +1850,7 @@ contains
                          //trim(walldate)//' '//trim(walltime)
       endif
       call mpp_clock_begin(id_wave_model_init)
-      call wave_model_init(Atmos_Wave_Boundary, Wave)
+      call wave_model_init(Atmos_Wave_Boundary, Ice_Wave_Boundary, Wave)
       call mpp_clock_end(id_wave_model_init)
       if (mpp_pe().EQ.mpp_root_pe()) then
         call DATE_AND_TIME(walldate, walltime, wallzone, wallvalues)
@@ -1977,8 +1980,9 @@ contains
     call mpp_clock_begin(id_flux_exchange_init)
     call flux_exchange_init ( Time, Atm, Land, Ice, Ocean, Ocean_state, Wave, &
              atmos_ice_boundary, land_ice_atmos_boundary, &
-             land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, atmos_wave_boundary, &
-         do_ocean, slow_ice_ocean_pelist, dt_atmos=dt_atmos, dt_cpld=dt_cpld)
+             land_ice_boundary, ice_ocean_boundary, ocean_ice_boundary, &
+             atmos_wave_boundary, ice_wave_boundary, &
+             do_ocean, slow_ice_ocean_pelist, dt_atmos=dt_atmos, dt_cpld=dt_cpld)
     call mpp_set_current_pelist(ensemble_pelist(ensemble_id,:))
     call mpp_clock_end(id_flux_exchange_init)
     call mpp_set_current_pelist()
@@ -2102,7 +2106,7 @@ contains
 !but will fail on overlapping but unequal pelists
     if (Wave%pe) then
       call mpp_set_current_pelist(Wave%pelist)
-      call wave_model_end (Wave)
+      call wave_model_end (Wave, Atmos_wave_boundary, Ice_wave_boundary)
     endif
     if (Ocean%is_ocean_pe) then
       call mpp_set_current_pelist(Ocean%pelist)
