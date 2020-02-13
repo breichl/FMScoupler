@@ -102,22 +102,31 @@ contains
     allocate( ice_wave_boundary%wavgrd_vcurr_mpp(is:ie,js:je,1) )
     ice_wave_boundary%wavgrd_vcurr_mpp(:,:,:) = 0.0
 
-    allocate( wav%ustk0_mpp(is:ie,js:je,1) )
-    wav%ustk0_mpp(:,:,:) = 0.0
-    allocate( wav%vstk0_mpp(is:ie,js:je,1) )
-    wav%vstk0_mpp(:,:,:) = 0.0
+    allocate( wav%ustk0_mpp(is:ie,js:je) )
+    wav%ustk0_mpp(:,:) = 0.0
+    allocate( wav%vstk0_mpp(is:ie,js:je) )
+    wav%vstk0_mpp(:,:) = 0.0
+
+    allocate( wav%ustkb_mpp(is:ie,js:je,wav%num_stk_bands) )
+    wav%ustkb_mpp(:,:,:) = 0.0
+    allocate( wav%vstkb_mpp(is:ie,js:je,wav%num_stk_bands) )
+    wav%vstkb_mpp(:,:,:) = 0.0
 
     ! This are a temporary and costly trick to make MPI work
-    allocate( wav%glob_loc_X(is:ie,js:je,1) )
-    wav%glob_loc_X(:,:,:) = 0
-    allocate( wav%glob_loc_Y(is:ie,js:je,1) )
-    wav%glob_loc_Y(:,:,:) = 0
+    allocate( wav%glob_loc_X(is:ie,js:je) )
+    wav%glob_loc_X(:,:) = 0
+    allocate( wav%glob_loc_Y(is:ie,js:je) )
+    wav%glob_loc_Y(:,:) = 0
 
     call mpp_get_compute_domain( Ice%domain, is, ie, js, je )
     allocate( ice_wave_boundary%icegrd_ustk0_mpp(is:ie,js:je,1) )
     ice_wave_boundary%icegrd_ustk0_mpp(:,:,:) = 0.0
     allocate( ice_wave_boundary%icegrd_vstk0_mpp(is:ie,js:je,1) )
     ice_wave_boundary%icegrd_vstk0_mpp(:,:,:) = 0.0
+    allocate( ice_wave_boundary%icegrd_ustkb_mpp(is:ie,js:je,1,wav%num_stk_bands) )
+    ice_wave_boundary%icegrd_ustkb_mpp(:,:,:,:) = 0.0
+    allocate( ice_wave_boundary%icegrd_vstkb_mpp(is:ie,js:je,1,wav%num_stk_bands) )
+    ice_wave_boundary%icegrd_vstkb_mpp(:,:,:,:) = 0.0
 
     return
   end subroutine ice_wave_exchange_init
@@ -160,6 +169,7 @@ contains
          ex_vstokes   ! Exchange grid y-Stokes drift
 
     integer :: remap_method ! Interpolation method (todo: list options)
+    integer :: i_stk
 
     remap_method = 1
 
@@ -167,21 +177,29 @@ contains
     call put_to_xgrid (Ice%u_surf(:,:,:) , 'OCN', ex_ucurr , xmap_ice_wav)
     call put_to_xgrid (Ice%v_surf(:,:,:) , 'OCN', ex_vcurr , xmap_ice_wav)
 
-    ! -> Put Wave parameters onto exchange grid
-    call put_to_xgrid (Wav%ustk0_mpp(:,:,1) , 'WAV', ex_ustokes , xmap_ice_wav)
-    call put_to_xgrid (Wav%vstk0_mpp(:,:,1) , 'WAV', ex_vstokes , xmap_ice_wav)
-
     ! -> Only on wave-PEs, bring wave information off exchange grid
     if (Wav%pe) then
        call get_from_xgrid(Ice_Wave_Boundary%wavgrd_ucurr_mpp(:,:,1), 'WAV', ex_ucurr, xmap_ice_wav)
        call get_from_xgrid(Ice_Wave_Boundary%wavgrd_vcurr_mpp(:,:,1), 'WAV', ex_vcurr, xmap_ice_wav)
     endif
 
-    ! -> Only on ice-PEs, bring ice information off exchange grid
+      ! -> Put Wave parameters onto exchange grid
+    call put_to_xgrid (Wav%ustk0_mpp(:,:) , 'WAV', ex_ustokes , xmap_ice_wav)
+    call put_to_xgrid (Wav%vstk0_mpp(:,:) , 'WAV', ex_vstokes , xmap_ice_wav)
     if (Ice%pe) then
-       call get_from_xgrid(Ice_Wave_Boundary%icegrd_ustk0_mpp(:,:,:), 'OCN', ex_ustokes, xmap_ice_wav)
-       call get_from_xgrid(Ice_Wave_Boundary%icegrd_vstk0_mpp(:,:,:), 'OCN', ex_vstokes, xmap_ice_wav)
+      call get_from_xgrid(Ice_Wave_Boundary%icegrd_ustk0_mpp(:,:,:), 'OCN', ex_ustokes, xmap_ice_wav)
+      call get_from_xgrid(Ice_Wave_Boundary%icegrd_vstk0_mpp(:,:,:), 'OCN', ex_vstokes, xmap_ice_wav)
     endif
+    do i_stk = 1,wav%num_Stk_bands
+      call put_to_xgrid (Wav%ustkb_mpp(:,:,i_stk) , 'WAV', ex_ustokes , xmap_ice_wav)
+      call put_to_xgrid (Wav%vstkb_mpp(:,:,i_stk) , 'WAV', ex_vstokes , xmap_ice_wav)
+      ! -> Only on ice-PEs, bring ice information off exchange grid
+      if (Ice%pe) then
+        call get_from_xgrid(Ice_Wave_Boundary%icegrd_ustkb_mpp(:,:,:,i_stk), 'OCN', ex_ustokes, xmap_ice_wav)
+        call get_from_xgrid(Ice_Wave_Boundary%icegrd_vstkb_mpp(:,:,:,i_stk), 'OCN', ex_vstokes, xmap_ice_wav)
+      endif
+
+    enddo
 
     return
   end subroutine ice_to_wave
