@@ -176,8 +176,9 @@ logical :: ncar_ocean_flux_orig  = .false. !< Use NCAR climate model turbulent f
                                            !! new experiments.
 logical :: raoult_sat_vap        = .false. !< Reduce saturation vapor pressure to account for seawater
 logical :: do_simple             = .false.
-
-
+!other Cd added by Xiaohui
+logical :: do_Sullivan               = .false.
+logical :: do_GFDL               = .false.
 namelist /surface_flux_nml/ no_neg_q,             &
                             use_virtual_temp,     &
                             alt_gustiness,        &
@@ -188,7 +189,9 @@ namelist /surface_flux_nml/ no_neg_q,             &
                             ncar_ocean_flux,      &
                             ncar_ocean_flux_orig, &
                             raoult_sat_vap,       &
-                            do_simple
+                            do_simple,            &
+                            do_Sullivan,          &
+                            do_GFDL
 
 
 
@@ -714,8 +717,39 @@ real   , intent(inout), dimension(:) :: cd, ch, ce, ustar, bstar
   real :: u, u10, tv, tstar, qstar, z0, xx, stab
   integer, parameter :: n_itts = 2
   integer               i, j
+! coeff for calculating GFDL Cd added by Xiaohui
+  real :: a1, a2,a3,a4,a5,a6,a7,a8,a9,b1,b2,b3,b4,b5,b6,b7,b8,b9,znotm
+  real :: c1,c2,c3,c4,c5,c6,c7,c8,c9           ! it is coefficient for sea state GFDL cd ,replace b1-b9
+  a1=1.044183210405817e-12
+  a2=-5.707116220939218e-11
+  a3=8.005722172810571e-10
+  a4=6.322045801589353e-09
+  a5=-2.422002988137712e-07
+  a6=2.269200594753249e-06
+  a7=-6.029592778169796e-06
+  a8=8.882284703541603e-06
+  a9=-2.371341185499601e-06
+  b1=1.814407011197660e-15
+  b2=-1.602907562918788e-13
+  b3=-3.351205313520358e-11
+  b4= 6.036179295940524e-09
+  b5=-3.725481686822030e-07
+  b6= 1.059761705898929e-05
+  b7=-1.375241830530252e-04
+  b8= 8.538858261732818e-04
+  b9=-1.936638976963742e-03
 
-  if(ncar_ocean_flux_orig) then
+
+  c1= 1.814e-15
+  c2= -1.321e-13
+  c3= -4.676e-11
+  c4= 8.251e-09
+  c5= -5.554e-07
+  c6= 1.878e-05
+  c7= -0.0003341
+  c8= 0.003138
+  c9= -0.01201
+if(ncar_ocean_flux_orig) then
 
       do i=1,size(u_del(:))
          if (avail(i)) then
@@ -753,7 +787,34 @@ real   , intent(inout), dimension(:) :: cd, ch, ce, ustar, bstar
                 end if
 
                 u10 = u/(1+cd_n10_rt*(log(z(i)/10)-psi_m)/vonkarm);       ! L-Y eqn. 9
+                ! Sulllivan (2012) and GFDL  Cd added by Xiaohui
+                if (do_Sullivan) then
+                      IF(u10.LT.11) then
+                        cd_n10 = 0.0012
+                      else IF(u10.LT.20 .and. u10.ge.11) then
+                        cd_n10=(0.49+0.065*u10)*0.001
+                      else
+                        cd_n10 = 0.0018
+                     end if
+                 else if (do_GFDL) then
+                      IF(u10==0.0) then
+                        cd_n10=0
+                      else IF(u10.LT.0.4.and.u10.LT.0.0) then
+                        znotm = 4e-7
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else IF(u10.LT.9.3.and. u10.ge.0.4) then
+                        znotm= a9 + a8*u10 + a7*u10**2 + a6*u10**3 + a5*u10**4 + a4*u10**5 + a3*u10**6 + a2*u10**7 + a1*u10**8;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else IF(u10.LT.60.0.and. u10.ge.9.3) then
+                        znotm = b9 + b8*u10 + b7*u10**2 + b6*u10**3 + b5*u10**4 +b4*u10**5 + b3*u10**6 +b2*u10**7 + b1*u10**8;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else
+                        znotm=1.3025e-3;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      end if
+                else
                 cd_n10 = (2.7/u10+0.142+0.0764*u10)/1e3;                  ! L-Y eqn. 6a again
+                end if
                 cd_n10_rt = sqrt(cd_n10);
                 ce_n10 = 34.6*cd_n10_rt/1e3;                              ! L-Y eqn. 6b again
                 stab = 0.5 + sign(0.5,zeta)
@@ -807,7 +868,34 @@ real   , intent(inout), dimension(:) :: cd, ch, ce, ustar, bstar
                 end if
 
                 u10 = u/(1+cd_n10_rt*(log(z(i)/10)-psi_m)/vonkarm);       ! L-Y eqn. 9
+                ! Sulllivan (2012) and GFDL  Cd added by Xiaohui
+                if (do_Sullivan) then
+                      IF(u10.LT.11) then
+                        cd_n10 = 0.0012
+                      else IF(u10.LT.20 .and. u10.ge.11) then
+                        cd_n10=(0.49+0.065*u10)*0.001
+                      else
+                        cd_n10 = 0.0018
+                     end if
+                 else if (do_GFDL) then
+                      IF(u10==0.0) then
+                        cd_n10=0
+                      else IF(u10.LT.0.4.and.u10.LT.0.0) then
+                        znotm = 4e-7
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else IF(u10.LT.9.3.and. u10.ge.0.4) then
+                        znotm= a9 + a8*u10 + a7*u10**2 + a6*u10**3 + a5*u10**4 + a4*u10**5 + a3*u10**6 + a2*u10**7 + a1*u10**8;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else IF(u10.LT.60.0.and. u10.ge.9.3) then
+                        znotm = b9 + b8*u10 + b7*u10**2 + b6*u10**3 + b5*u10**4 +b4*u10**5 + b3*u10**6 +b2*u10**7 + b1*u10**8;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      else
+                        znotm=1.3025e-3;
+                        cd_n10=(0.4/(log(10/znotm)))**2;
+                      end if
+                else
                 cd_n10 = (2.7/u10+0.142+0.0764*u10)/1e3;                  ! L-Y eqn. 6a again
+                end if
                 cd_n10_rt = sqrt(cd_n10);
                 ce_n10 = 34.6*cd_n10_rt/1e3;                              ! L-Y eqn. 6b again
                 stab = 0.5 + sign(0.5,zeta)
