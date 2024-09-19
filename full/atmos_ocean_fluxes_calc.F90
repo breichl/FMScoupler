@@ -1,18 +1,29 @@
+!***********************************************************************
+!*                   GNU Lesser General Public License
+!*
+!* This file is part of the GFDL Flexible Modeling System (FMS) Coupler.
+!*
+!* FMS Coupler is free software: you can redistribute it and/or modify
+!* it under the terms of the GNU Lesser General Public License as
+!* published by the Free Software Foundation, either version 3 of the
+!* License, or (at your option) any later version.
+!*
+!* FMS Coupler is distributed in the hope that it will be useful, but
+!* WITHOUT ANY WARRANTY; without even the implied warranty of
+!* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+!* General Public License for more details.
+!*
+!* You should have received a copy of the GNU Lesser General Public
+!* License along with FMS Coupler.
+!* If not, see <http://www.gnu.org/licenses/>.
+!***********************************************************************
+!> \file
+!> \brief Calculates gas fluxes for atmosphere and ocean 
 module atmos_ocean_fluxes_calc_mod
-  use coupler_types_mod, only : coupler_1d_bc_type,&
-      & ind_flux,&
-      & ind_kw,&
-      & ind_u10,&
-      & ind_alpha,&
-      & ind_pCair,&
-      & ind_psurf,&
-      & ind_sc_no,&
-      & ind_csurf,&
-      & ind_flux0,&
-      & ind_deltap,&
-      & ind_deposition
-  use mpp_mod,           only : mpp_error, FATAL
-  use constants_mod,     only : wtmair, rdgas, vonkarm
+
+  use FMS
+  use FMSconstants, only: wtmair, rdgas, vonkarm
+
   implicit none
   private
 
@@ -32,13 +43,13 @@ contains
   !! \throw FATAL, "Unknown flux type ([flux_type]) for [name]"
   subroutine atmos_ocean_fluxes_calc(gas_fields_atm, gas_fields_ice,&
       & gas_fluxes, seawater, tsurf, ustar, cd_m)
-    type(coupler_1d_bc_type), intent(in)    :: gas_fields_atm !< Structure containing atmospheric surface
+    type(FmsCoupler1dBC_type), intent(in)    :: gas_fields_atm !< Structure containing atmospheric surface
                                                               !! variables that are used in the calculation
                                                               !! of the atmosphere-ocean gas fluxes.
-    type(coupler_1d_bc_type), intent(in)    :: gas_fields_ice !< Structure containing ice-top and ocean
+    type(FmsCoupler1dBC_type), intent(in)    :: gas_fields_ice !< Structure containing ice-top and ocean
                                                               !! surface variables that are used in the
                                                               !! calculation of the atmosphere-ocean gas fluxes.
-    type(coupler_1d_bc_type), intent(inout) :: gas_fluxes !< Structure containing the gas fluxes between
+    type(FmsCoupler1dBC_type), intent(inout) :: gas_fluxes !< Structure containing the gas fluxes between
                                                           !! the atmosphere and the ocean and parameters
                                                           !! related to the calculation of these fluxes.
     real, dimension(:), intent(in)           :: seawater  !< 1 for the open water category, 0 if ice or land.
@@ -63,7 +74,7 @@ contains
 
     if (.not. associated(gas_fluxes%bc)) then
       if (gas_fluxes%num_bcs .ne. 0) then
-        call mpp_error(FATAL, trim(error_header) // ' Number of gas fluxes not zero')
+        call fms_mpp_error(FATAL, trim(error_header) // ' Number of gas fluxes not zero')
       else
         return
       endif
@@ -71,7 +82,7 @@ contains
 
     do n = 1, gas_fluxes%num_bcs
       ! only do calculations if the flux has not been overridden
-      if ( .not. gas_fluxes%bc(n)%field(ind_flux)%override) then
+      if ( .not. gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%override) then
         if (gas_fluxes%bc(n)%flux_type .eq. 'air_sea_gas_flux_generic') then
           length = size(gas_fluxes%bc(n)%field(1)%values(:))
 
@@ -79,65 +90,65 @@ contains
             allocate( kw(length) )
             allocate ( cair(length) )
           elseif (size(kw(:)) .ne. length) then
-            call mpp_error(FATAL, trim(error_header) // ' Lengths of flux fields do not match')
+            call fms_mpp_error(FATAL, trim(error_header) // ' Lengths of flux fields do not match')
           endif
 
           if (gas_fluxes%bc(n)%implementation .eq. 'ocmip2') then
             do i = 1, length
               if (seawater(i) == 1.) then
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) =&
-                    & gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(ind_u10)%values(i)**2
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) =&
+                    & gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i)**2
                 cair(i) = &
-                    gas_fields_ice%bc(n)%field(ind_alpha)%values(i) * &
-                    gas_fields_atm%bc(n)%field(ind_pCair)%values(i) * &
-                    gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & sqrt(660. / (gas_fields_ice%bc(n)%field(ind_sc_no)%values(i) + epsln)) *&
-                    & (gas_fields_ice%bc(n)%field(ind_csurf)%values(i) - cair(i))
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & sqrt(660. / (gas_fields_ice%bc(n)%field(ind_sc_no)%values(i) + epsln)) *&
-                    & gas_fields_ice%bc(n)%field(ind_csurf)%values(i)
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) =&
-                    & (gas_fields_ice%bc(n)%field(ind_csurf)%values(i) - cair(i)) / &
-                   (gas_fields_ice%bc(n)%field(ind_alpha)%values(i) * permeg + epsln)
+                    gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) * &
+                    gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) * &
+                    gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & sqrt(660. / (gas_fields_ice%bc(n)%field(fms_coupler_ind_sc_no)%values(i) + epsln)) *&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i) - cair(i))
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & sqrt(660. / (gas_fields_ice%bc(n)%field(fms_coupler_ind_sc_no)%values(i) + epsln)) *&
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) =&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i) - cair(i)) / &
+                   (gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) * permeg + epsln)
               else
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) = 0.0
                 cair(i) = 0.0
               endif
             enddo
           elseif (gas_fluxes%bc(n)%implementation .eq. 'duce') then
             do i = 1, length
               if (seawater(i) == 1.) then
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) = &
-                    & gas_fields_atm%bc(n)%field(ind_u10)%values(i) /&
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) = &
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i) /&
                     & (770.+45.*gas_fluxes%bc(n)%param(1)**(1./3.)) *&
                     & 101325./(rdgas*wtmair*1e-3*tsurf(i) *&
-                    & gas_fields_ice%bc(n)%field(ind_alpha)%values(i))
+                    & max(gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i),epsln))
                 !alpha: mol/m3/atm
                 cair(i) = &
-                    gas_fields_ice%bc(n)%field(ind_alpha)%values(i) * &
-                    gas_fields_atm%bc(n)%field(ind_pCair)%values(i) * &
-                    gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * 9.86923e-6
+                    gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) * &
+                    gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) * &
+                    gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * 9.86923e-6
                 cair(i) = max(cair(i),0.)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & (max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.) - cair(i))
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.)
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) =&
-                    & (max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.) - cair(i)) /&
-                    & (gas_fields_ice%bc(n)%field(ind_alpha)%values(i) * permeg + epsln)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & (max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.) - cair(i))
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) =&
+                    & (max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.) - cair(i)) /&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) * permeg + epsln)
               else
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) = 0.0
                 cair(i) = 0.0
               endif
             enddo
@@ -146,38 +157,38 @@ contains
             do i = 1, length
               if (seawater(i) == 1.) then
                 !calc_kw(tk,p,u10,h,vb,mw,sc_w,ustar,cd_m)
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) =&
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) =&
                     & calc_kw(tsurf(i),&
-                    & gas_fields_atm%bc(n)%field(ind_psurf)%values(i),&
-                    & gas_fields_atm%bc(n)%field(ind_u10)%values(i),&
-                    & 101325./(rdgas*wtmair*1e-3*tsurf(i)*gas_fields_ice%bc(n)%field(ind_alpha)%values(i)),&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i),&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i),&
+                    & 101325./(rdgas*wtmair*1e-3*tsurf(i)*max(gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i),epsln)),&
                     & gas_fluxes%bc(n)%param(2),&
                     & gas_fluxes%bc(n)%param(1),&
-                    & gas_fields_ice%bc(n)%field(ind_sc_no)%values(i))
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_sc_no)%values(i))
                 cair(i) =&
-                    & gas_fields_ice%bc(n)%field(ind_alpha)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_pCair)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * 9.86923e-6
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * 9.86923e-6
                 cair(i) = max(cair(i),0.)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & (max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.) - cair(i))
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) =&
-                    & gas_fluxes%bc(n)%field(ind_kw)%values(i) *&
-                    & max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.)
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) =&
-                    & (max(gas_fields_ice%bc(n)%field(ind_csurf)%values(i),0.) - cair(i)) /&
-                    & (gas_fields_ice%bc(n)%field(ind_alpha)%values(i) * permeg + epsln)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & (max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.) - cair(i))
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) =&
+                    & gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) *&
+                    & max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) =&
+                    & (max(gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i),0.) - cair(i)) /&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) * permeg + epsln)
               else
-                gas_fluxes%bc(n)%field(ind_kw)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_flux0)%values(i) = 0.0
-                gas_fluxes%bc(n)%field(ind_deltap)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_kw)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux0)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_deltap)%values(i) = 0.0
                 cair(i) = 0.0
               endif
             enddo
           else
-            call mpp_error(FATAL, ' Unknown implementation (' //&
+            call fms_mpp_error(FATAL, ' Unknown implementation (' //&
                 & trim(gas_fluxes%bc(n)%implementation) // ') for ' // trim(gas_fluxes%bc(n)%name))
           endif
         elseif (gas_fluxes%bc(n)%flux_type .eq. 'air_sea_gas_flux') then
@@ -187,21 +198,21 @@ contains
             allocate( kw(length) )
             allocate ( cair(length) )
           elseif (size(kw(:)) .ne. length) then
-            call mpp_error(FATAL, trim(error_header) // ' Lengths of flux fields do not match')
+            call fms_mpp_error(FATAL, trim(error_header) // ' Lengths of flux fields do not match')
           endif
 
           if (gas_fluxes%bc(n)%implementation .eq. 'ocmip2_data') then
             do i = 1, length
               if (seawater(i) == 1.) then
-                kw(i) = gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(ind_u10)%values(i)
+                kw(i) = gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i)
                 cair(i) =&
-                    & gas_fields_ice%bc(n)%field(ind_alpha)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_pCair)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = kw(i) *&
-                    & (gas_fields_ice%bc(n)%field(ind_csurf)%values(i) - cair(i))
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = kw(i) *&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i) - cair(i))
               else
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
                 cair(i) = 0.0
                 kw(i) = 0.0
               endif
@@ -209,15 +220,15 @@ contains
           elseif (gas_fluxes%bc(n)%implementation .eq. 'ocmip2') then
             do i = 1, length
               if (seawater(i) == 1.) then
-                kw(i) = gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(ind_u10)%values(i)**2
+                kw(i) = gas_fluxes%bc(n)%param(1) * gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i)**2
                 cair(i) =&
-                    & gas_fields_ice%bc(n)%field(ind_alpha)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_pCair)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = kw(i) *&
-                    & (gas_fields_ice%bc(n)%field(ind_csurf)%values(i) - cair(i))
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * gas_fluxes%bc(n)%param(2)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = kw(i) *&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i) - cair(i))
               else
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
                 cair(i) = 0.0
                 kw(i) = 0.0
               endif
@@ -226,21 +237,21 @@ contains
             do i = 1, length
               if (seawater(i) == 1.) then
                 kw(i) = gas_fluxes%bc(n)%param(1) *&
-                    & max(0.0, gas_fields_atm%bc(n)%field(ind_u10)%values(i) - gas_fluxes%bc(n)%param(2))
+                    & max(0.0, gas_fields_atm%bc(n)%field(fms_coupler_ind_u10)%values(i) - gas_fluxes%bc(n)%param(2))
                 cair(i) =&
-                    & gas_fields_ice%bc(n)%field(ind_alpha)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_pCair)%values(i) *&
-                    & gas_fields_atm%bc(n)%field(ind_psurf)%values(i) * gas_fluxes%bc(n)%param(3)
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = kw(i) *&
-                    & (gas_fields_ice%bc(n)%field(ind_csurf)%values(i) - cair(i))
+                    & gas_fields_ice%bc(n)%field(fms_coupler_ind_alpha)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_pCair)%values(i) *&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_psurf)%values(i) * gas_fluxes%bc(n)%param(3)
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = kw(i) *&
+                    & (gas_fields_ice%bc(n)%field(fms_coupler_ind_csurf)%values(i) - cair(i))
               else
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
                 cair(i) = 0.0
                 kw(i) = 0.0
               endif
             enddo
           else
-            call mpp_error(FATAL, ' Unknown implementation (' //&
+            call fms_mpp_error(FATAL, ' Unknown implementation (' //&
                 & trim(gas_fluxes%bc(n)%implementation) // ') for ' // trim(gas_fluxes%bc(n)%name))
           endif
         elseif (gas_fluxes%bc(n)%flux_type .eq. 'air_sea_deposition') then
@@ -248,7 +259,7 @@ contains
         elseif (gas_fluxes%bc(n)%flux_type .eq. 'land_sea_runoff') then
           if (gas_fluxes%bc(n)%param(1) .le. 0.0) then
             write (error_string, '(1pe10.3)') gas_fluxes%bc(n)%param(1)
-            call mpp_error(FATAL, ' Bad parameter (' // trim(error_string) //&
+            call fms_mpp_error(FATAL, ' Bad parameter (' // trim(error_string) //&
                 & ') for land_sea_runoff for ' // trim(gas_fluxes%bc(n)%name))
           endif
 
@@ -257,19 +268,19 @@ contains
           if (gas_fluxes%bc(n)%implementation .eq. 'river') then
             do i = 1, length
               if (seawater(i) == 1.) then
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) =&
-                    & gas_fields_atm%bc(n)%field(ind_deposition)%values(i) /&
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) =&
+                    & gas_fields_atm%bc(n)%field(fms_coupler_ind_deposition)%values(i) /&
                     & gas_fluxes%bc(n)%param(1)
               else
-                gas_fluxes%bc(n)%field(ind_flux)%values(i) = 0.0
+                gas_fluxes%bc(n)%field(fms_coupler_ind_flux)%values(i) = 0.0
               endif
             enddo
           else
-            call mpp_error(FATAL, ' Unknown implementation (' //&
+            call fms_mpp_error(FATAL, ' Unknown implementation (' //&
                 & trim(gas_fluxes%bc(n)%implementation) // ') for ' // trim(gas_fluxes%bc(n)%name))
           endif
         else
-          call mpp_error(FATAL, ' Unknown flux_type (' // trim(gas_fluxes%bc(n)%flux_type) //&
+          call fms_mpp_error(FATAL, ' Unknown flux_type (' // trim(gas_fluxes%bc(n)%flux_type) //&
               & ') for ' // trim(gas_fluxes%bc(n)%name))
         endif
       endif

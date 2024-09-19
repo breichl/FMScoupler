@@ -1,30 +1,34 @@
-
+!***********************************************************************
+!*                   GNU Lesser General Public License
+!*
+!* This file is part of the GFDL Flexible Modeling System (FMS) Coupler.
+!*
+!* FMS Coupler is free software: you can redistribute it and/or modify
+!* it under the terms of the GNU Lesser General Public License as
+!* published by the Free Software Foundation, either version 3 of the
+!* License, or (at your option) any later version.
+!*
+!* FMS Coupler is distributed in the hope that it will be useful, but
+!* WITHOUT ANY WARRANTY; without even the implied warranty of
+!* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+!* General Public License for more details.
+!*
+!* You should have received a copy of the GNU Lesser General Public
+!* License along with FMS Coupler.
+!* If not, see <http://www.gnu.org/licenses/>.
+!***********************************************************************
+!> \file
+!> \brief Handles ice component updates and time steps
 module ice_model_mod
 
+!! Components
 use   ice_albedo_mod, only:  ice_albedo_init, ice_albedo
 use ocean_albedo_mod, only:  compute_ocean_albedo_new
 use  ocean_rough_mod, only:  compute_ocean_roughness, fixed_ocean_roughness
 
-use  amip_interp_mod, only: amip_interp_type, amip_interp_new, &
-                            get_amip_ice, get_amip_sst
-use time_manager_mod, only: time_type, get_time, operator(+)
-use diag_manager_mod, only: diag_axis_init, register_diag_field, send_data
-use    constants_mod, only: HLV, HLF, TFREEZE, pi
-
-use          fms_mod, only: file_exist, open_namelist_file, open_restart_file, &
-                            close_file, mpp_pe, mpp_root_pe, mpp_npes,         &
-                            write_version_number, stdlog, error_mesg, FATAL,   &
-                            check_nml_error, read_data, write_data, NOTE,      &
-                            set_domain, nullify_domain
-use       fms_io_mod, only: get_restart_io_mode
-
-use       mpp_io_mod, only: mpp_open, mpp_close, mpp_get_info, mpp_read,   &
-                            MPP_RDONLY, MPP_NETCDF, MPP_MULTI, MPP_SINGLE, &
-                            fieldtype, mpp_get_atts, mpp_get_fields
-
-use  mpp_domains_mod, only: domain2d,  mpp_get_layout,  &
-                            mpp_get_global_domain, mpp_get_compute_domain
-use mpp_mod, only: mpp_min, mpp_max
+!! FMS
+use FMS
+use FMSconstants,     only: HLV, HLF, TFREEZE, pi
 
 implicit none
 private
@@ -54,17 +58,38 @@ logical :: use_climo_sst            = .false.
 logical :: use_annual_sst           = .false.
 character(len=64) :: ice_method = 'prognostic' ! none, uniform, or prognostic
 character(len=64) :: sst_method = 'specified'  ! specified, uniform, or mixed_layer
-                                               ! Additional sst specifications: 'aqua_planet_#'
-                                               !   aqua_planet_1 = Control profile
-                                               !   aqua_planet_2 = Peaked
-                                               !   aqua_planet_3 = Flat
-                                               !   aqua_planet_4 = Qobs
-                                               !   aqua_planet_5 = Control-5N
-                                               !   aqua_planet_6 = 1KEQ
-                                               !   aqua_planet_7 = 3KEQ
-                                               !   aqua_planet_8 = 3KW1
+                                               ! Additional sst specifications: 'aqua_planet_#' test cases are derived 
+                                               ! from the 2000 paper by Neale and Hoskins, 'A standard test for AGCMs including 
+                                               ! their physical parameterizations: I. The proposal, Atmospheric Science Letters'.   
+                                               ! The 'aqua_planet_1' testcase corresponds to the 'Control' SST test case and 
+                                               ! provides the pattern which is shifted for the subsequent cases.
+                                               ! The test cases Control, and aqua_planet_5N-aqua_planet_60N were documented and used 
+                                               ! in Burnett et al., 2021, GRL,  https://doi.org/10.1029/2020GL091980
+                                               !   aqua_planet_1   = Control profile
+                                               !   aqua_planet_2   = Peaked
+                                               !   aqua_planet_3   = Flat
+                                               !   aqua_planet_4   = Qobs
+                                               !   aqua_planet_5   = Control shifted by 5N
+                                               !   aqua_planet_6   = 1KEQ
+                                               !   aqua_planet_7   = 3KEQ
+                                               !   aqua_planet_8   = 3KW1
                                                !   aqua_planet_10N = Control shifted by 10N
                                                !   aqua_planet_15N = Control shifted by 15N
+                                               !   aqua_planet_20N = Control shifted by 20N
+                                               !   aqua_planet_25N = Control shifted by 25N
+                                               !   aqua_planet_30N = Control shifted by 20N
+                                               !   aqua_planet_35N = Control shifted by 35N
+                                               !   aqua_planet_40N = Control shifted by 30N
+                                               !   aqua_planet_45N = Control shifted by 45N
+                                               !   aqua_planet_50N = Control shifted by 50N
+                                               !   aqua_planet_55N = Control shifted by 55N
+                                               !   aqua_planet_60N = Control shifted by 60N
+                                               !   aqua_planet_65N = Control shifted by 65N
+                                               !   aqua_planet_70N = Control shifted by 70N
+                                               !   aqua_planet_75N = Control shifted by 75N
+                                               !   aqua_planet_80N = Control shifted by 80N
+                                               !   aqua_planet_85N = Control shifted by 85N
+                                               !   aqua_planet_90N = Control shifted by 90N
 real              :: temp_ice = 270.      ! used when ice_method = 'uniform'
 real              :: temp_sst = 280.      ! used when sst_method = 'uniform'
 real              :: sst_anom = 0.        ! sst perturbation used for sensitivity experiments
@@ -80,7 +105,7 @@ namelist /ice_model_nml/ diff, thickness_min, specified_ice_thickness,        &
 !----------------------------------------------------------------
 
 type ice_data_type
-  type(domain2d),pointer                :: Domain
+  type(FmsMppDomain2D),pointer                :: Domain
 
    real,    pointer, dimension(:,:)     :: glon_bnd =>NULL(), &
                                            glat_bnd =>NULL(), &
@@ -107,7 +132,7 @@ type ice_data_type
                                          rough_moist =>NULL(), &
                                          thickness =>NULL()
 
-   type (time_type)                   :: Time_Init, Time,  &
+   type (FmsTime_type)                   :: Time_Init, Time,  &
                                          Time_step_fast,   &
                                          Time_step_slow
 end type ice_data_type
@@ -133,7 +158,7 @@ end type atmos_ice_boundary_type
 !----------------------------------------------------------------
 
 integer :: is, ie, js, je
-type(amip_interp_type), save :: Amip_ice, Amip_sst
+type(FmsAmipInterp_type), save :: Amip_ice, Amip_sst
 logical :: module_is_initialized = .false.
 character(len=64) :: fname = 'INPUT/ice_model.res.nc'
 
@@ -163,18 +188,18 @@ contains
 
 !-----------------------------------------------------------------------
 !
-!   updates ice model on the atmospheric (fast) time step 
+!   updates ice model on the atmospheric (fast) time step
 !   averages input quantities to be seen by the ocean
 !
 !    flux_u  = zonal wind stress
 !    flux_v  = meridional wind stress
-!    flux_sw = net shortwave radiation (down-up) 
+!    flux_sw = net shortwave radiation (down-up)
 !    flux_sw_vis = net visible shortwave radiation (down-up)
 !    flux_sw_dir = net direct shortwave radiation (down-up)
 !    flux_sw_dif = net diffuse shortwave radiation (down-up)
 !    flux_sw_vis_dir = net visible direct shortwave radiation (down-up)
 !    flux_sw_vis_dif = net visible diffuse shortwave radiation (down-up)
-!    flux_lw = net longwave radiation (down-up) 
+!    flux_lw = net longwave radiation (down-up)
 !    flux_t  = sensible heat flux
 !    flux_q  = specific humidity flux
 !    lprec   = liquid precipitiation rate (kg/m2/s)
@@ -224,15 +249,15 @@ endif
 
    if (trim(sst_method) == 'mixed_layer') then
 
-       call get_time ( Ice%Time_step_slow, dt )
+       call fms_time_manager_get_time ( Ice%Time_step_slow, dt )
 
        where (Ice%mask .and. .not. Ice%ice_mask)
           flux_i = ( Atmos_boundary%lw_flux + Atmos_boundary%sw_flux -   &
                      Atmos_boundary%t_flux - Atmos_boundary%q_flux*HLV - &
                      Atmos_boundary%fprec*HLF ) * real(dt)/heat_capacity_ocean
           deriv = -( Atmos_boundary%dhdt + Atmos_boundary%dedt*HLV + &
-                     Atmos_boundary%drdt) * real(dt)/heat_capacity_ocean 
-          t_dt_surf = flux_i/(1.0 -deriv) 
+                     Atmos_boundary%drdt) * real(dt)/heat_capacity_ocean
+          t_dt_surf = flux_i/(1.0 -deriv)
           ts_new = Ice%t_surf + t_dt_surf
        endwhere
 
@@ -336,7 +361,7 @@ endif
 
  !---- get the specified sea-ice fraction -----
 
-    call get_amip_ice (Ice%Time, Amip_ice, ice_frac )
+    call fms_amip_interp_get_amip_ice (Ice%Time, Amip_ice, ice_frac )
 
   ! determine which grid boxes have ice coverage
     where ( Ice%mask(:,:) .and. ice_frac > 0.5 )
@@ -360,7 +385,7 @@ endif
 
  !---- get the specified ocean temperature -----
 
-    call get_amip_sst (Ice%Time, Amip_sst, sea_temp )
+    call fms_amip_interp_get_amip_sst (Ice%Time, Amip_sst, sea_temp )
 
   ! determine which grid boxes have open ocean coverage ----
     where ( Ice%mask(:,:) .and. .not.Ice%ice_mask(:,:))
@@ -385,38 +410,32 @@ endif
                              Time_step_fast, Time_step_slow, &
                              glon_bnd, glat_bnd, Atmos_domain )
  type(ice_data_type), intent(inout) :: Ice
- type(time_type)    , intent(in)    :: Time_Init, Time, &
+ type(FmsTime_type)    , intent(in)    :: Time_Init, Time, &
                                        Time_step_fast, Time_step_slow
  real               , intent(in)    :: glon_bnd(:,:), glat_bnd(:,:)
- type(domain2d), intent(in), target :: Atmos_domain
+ type(FmsMppDomain2D), intent(in), target :: Atmos_domain
 
 real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
  integer :: isg, ieg, jsg, jeg
  integer :: unit, ierr, io, i, j
  integer :: ndim, nvar, natt, ntime, nlon, nlat, mlon, mlat, layout(2)
- type(fieldtype), allocatable :: Fields(:)
  logical :: need_ic
+ type(FmsNetcdfDomainFile_t) :: land_mask_fileobj !< Land mask domain decomposed fileobj
+ type(FmsNetcdfDomainFile_t) :: ice_restart_fileobj !< Ice restart domain decomposed fileobj
 
  if (module_is_initialized) then
      return
  endif
 
- if ( file_exist( 'input.nml' ) ) then
-    unit = open_namelist_file ( )
-    ierr = 1
-    do while ( ierr /= 0 )       
-       read ( unit,  nml = ice_model_nml, iostat = io, end = 10 )
-       ierr = check_nml_error ( io, 'ice_model_nml' )
-    enddo
- 10 continue
-    call close_file (unit)       
- endif
+ !< Read the namelist
+ read (fms_mpp_input_nml_file, nml=ice_model_nml, iostat=io)
+ ierr = check_nml_error(io, 'ice_model_nml')
 
- call get_restart_io_mode(do_netcdf_restart)
+ do_netcdf_restart = .true. !< Always do netcdf!
 
- call write_version_number (version, tagname)
- if ( mpp_pe() == mpp_root_pe() ) then
-    write (stdlog(), nml=ice_model_nml)
+ call fms_write_version_number (version, tagname)
+ if ( fms_mpp_pe() == fms_mpp_root_pe() ) then
+    write (fms_mpp_stdlog(), nml=ice_model_nml)
  endif
 
 !---- error checks ----
@@ -438,6 +457,21 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
        trim(sst_method) /= 'aqua_planet_8'        .and. &
        trim(sst_method) /= 'aqua_planet_10N'      .and. &
        trim(sst_method) /= 'aqua_planet_15N'      .and. &
+       trim(sst_method) /= 'aqua_planet_20N'      .and. &
+       trim(sst_method) /= 'aqua_planet_25N'      .and. &
+       trim(sst_method) /= 'aqua_planet_30N'      .and. &
+       trim(sst_method) /= 'aqua_planet_35N'      .and. &
+       trim(sst_method) /= 'aqua_planet_40N'      .and. &
+       trim(sst_method) /= 'aqua_planet_45N'      .and. &
+       trim(sst_method) /= 'aqua_planet_50N'      .and. &
+       trim(sst_method) /= 'aqua_planet_55N'      .and. &
+       trim(sst_method) /= 'aqua_planet_60N'      .and. &
+       trim(sst_method) /= 'aqua_planet_65N'      .and. &
+       trim(sst_method) /= 'aqua_planet_70N'      .and. &
+       trim(sst_method) /= 'aqua_planet_75N'      .and. &
+       trim(sst_method) /= 'aqua_planet_80N'      .and. &
+       trim(sst_method) /= 'aqua_planet_85N'      .and. &
+       trim(sst_method) /= 'aqua_planet_90N'      .and. &
        trim(sst_method) /= 'aqua_walker'          .and. &
        trim(sst_method) /= 'aqua_walker_cos'      .and. &
        trim(sst_method) /= 'aqua_walker_guass'    .and. &
@@ -448,15 +482,7 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
      ('ice_model_init', 'namelist variable sst_method has invalid value', FATAL)
 
 !----------------------------------------------------------
-!--- open the grid_spec file ---
 
-! call mpp_open ( unit, 'INPUT/grid_spec.nc', MPP_RDONLY, MPP_NETCDF, &
-!                 threading=MPP_MULTI, fileset = MPP_SINGLE )
-! call mpp_get_info (unit, ndim, nvar, natt, ntime)
-! allocate (Fields(nvar))
-! call mpp_get_fields (unit, Fields)
-
-! call get_grid_size ( Fields, nlon, nlat )
   nlon = size(glon_bnd,1)-1
   nlat = size(glon_bnd,2)-1
 
@@ -466,7 +492,7 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
 ! if (present(Atmos_domain)) then
 !     call mpp_get_layout (Atmos_domain, layout)
 ! else
-!     call mpp_define_layout  ( (/1,nlon,1,nlat/), mpp_npes(), layout )
+!     call mpp_define_layout  ( (/1,nlon,1,nlat/), fms_mpp_npes(), layout )
 ! endif
 
 ! call mpp_define_domains ( (/1,nlon,1,nlat/), layout, Ice%Domain, &
@@ -475,10 +501,10 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
   Ice%Domain => Atmos_domain
 
 !----------------------------------------------------------
-! get global domain indices 
-! this assumes that domain2d type has been assigned
+! get global domain indices
+! this assumes that FmsMppDomain2D type has been assigned
 
-  call mpp_get_global_domain ( Ice%Domain, isg, ieg, jsg, jeg )
+  call fms_mpp_domains_get_global_domain ( Ice%Domain, isg, ieg, jsg, jeg )
 
   allocate ( Ice%glon_bnd (isg:ieg+1,jsg:jeg+1), &
              Ice%glat_bnd (isg:ieg+1,jsg:jeg+1), &
@@ -498,17 +524,23 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
   !enddo
   !enddo
 
+  ! set io domain if not there in order to check files
+  if ( .not. associated(fms_mpp_domains_get_io_domain(Ice%domain)) ) then
+    call fms_mpp_domains_define_io_domain(Ice%domain, (/ 1, 1 /) )
+  endif
+
   ! read the land mask from a file (land=1)
-   if (file_exist('INPUT/land_mask.nc')) then
-      call read_data ('INPUT/land_mask.nc', 'land_mask', Ice%glon, no_domain=.true.) !, Ice%Domain)
+  if (fms2_io_open_file(land_mask_fileobj, 'INPUT/land_mask.nc', 'read', Ice%domain)) then
+      call fms2_io_read_data (land_mask_fileobj, 'land_mask', Ice%glon)
       where (Ice%glon > 0.50)
          Ice%gmask = .false.
       elsewhere
          Ice%gmask = .true.
       endwhere
-   else
+      call fms2_io_close_file(land_mask_fileobj)
+  else
       Ice%gmask = .true.  ! aqua-planet
-   endif
+  endif
 
    ! mid-point of grid box
   !if (is_latlon(glon_bnd,latb_out)) then
@@ -524,15 +556,10 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
       call get_cell_center (Ice%glon_bnd, Ice%glat_bnd, Ice%glon, Ice%glat)
   !endif
 
-!  call read_grid_data ( unit, Fields, Ice%glon_bnd, Ice%glat_bnd, &
-!                        Ice%glon, Ice%glat, Ice%gmask )
-!  call mpp_close(unit)
-!  deallocate (Fields)
-
 !----------------------------------------------------------
-! get compute domain indices 
+! get compute domain indices
 
-  call mpp_get_compute_domain ( Ice%Domain, is, ie, js, je )
+  call fms_mpp_domains_get_compute_domain ( Ice%Domain, is, ie, js, je )
 
   allocate ( Ice%lon_bnd        (is:ie+1,js:je+1), &
              Ice%lat_bnd        (is:ie+1,js:je+1), &
@@ -566,54 +593,21 @@ real :: lon0, lond, latd, amp, t_control, dellon, dom_wid, siggy, tempi
 
 need_ic = .false.
 
-if (file_exist('INPUT/ice_model.res.nc', domain=Ice%Domain )) then
-   if (mpp_pe() == mpp_root_pe()) call error_mesg ('ice_model_mod', &
+if (fms2_io_open_file(ice_restart_fileobj, 'INPUT/ice_model.res.nc', 'read', Ice%domain, is_restart=.true.)) then
+   if (fms_mpp_pe() == fms_mpp_root_pe()) call error_mesg ('ice_model_mod', &
             'Reading NetCDF formatted restart file: INPUT/ice_model.res.nc', NOTE)
-   call read_data(fname, 'mlon', mlon, Ice%Domain)
-   call read_data(fname, 'mlat', mlat, Ice%Domain)
+
+   call fms2_io_read_data(ice_restart_fileobj, 'mlon', mlon)
+   call fms2_io_read_data(ice_restart_fileobj, 'mlat', mlat)
    if (mlon /= nlon .or. mlat /= nlat )  &
-        call error_mesg ('ice_model_init',           &       
+        call error_mesg ('ice_model_init',           &
                         'incorrect resolution on restart', FATAL)
-   call read_data ( fname, 't_surf',         Ice%t_surf,         Ice%Domain )
-   call read_data ( fname, 'thickness',      Ice%thickness,      Ice%Domain )
-   call read_data ( fname, 'albedo',         Ice%albedo,         Ice%Domain )
-   call read_data ( fname, 'albedo_vis_dir', Ice%albedo_vis_dir, Ice%Domain )
-   call read_data ( fname, 'albedo_nir_dir', Ice%albedo_nir_dir, Ice%Domain )
-   call read_data ( fname, 'albedo_vis_dif', Ice%albedo_vis_dif, Ice%Domain )
-   call read_data ( fname, 'albedo_nir_dif', Ice%albedo_nir_dif, Ice%Domain )
-   call read_data ( fname, 'rough_mom',      Ice%rough_mom,      Ice%Domain )
-   call read_data ( fname, 'rough_heat',     Ice%rough_heat,     Ice%Domain )
-   call read_data ( fname, 'rough_moist',    Ice%rough_moist,    Ice%Domain)
+
+   call ice_register_restart(ice_restart_fileobj, Ice)
+   call fms2_io_read_restart(ice_restart_fileobj)
+   call fms2_io_close_file(ice_restart_fileobj)
 else
-   if (file_exist('INPUT/ice_model.res')) then
-      if (mpp_pe() == mpp_root_pe()) call error_mesg ('ice_model_mod', &
-            'Reading native formatted restart file.', NOTE)
-      call set_domain (Ice%Domain)
-      unit = open_restart_file ('INPUT/ice_model.res', 'read')
-      read  (unit) mlon, mlat
-
-    ! restart resolution must be consistent with grid spec
-      if (mlon /= nlon .or. mlat /= nlat) then
-           call error_mesg ('ice_model_init',           &
-            'incorrect resolution on restart', FATAL)
-      endif
-
-      call read_data ( unit, Ice%t_surf        )
-      call read_data ( unit, Ice%thickness     )
-      call read_data ( unit, Ice%albedo        )
-      call read_data ( unit, Ice%albedo_vis_dir)
-      call read_data ( unit, Ice%albedo_nir_dir)
-      call read_data ( unit, Ice%albedo_vis_dif)
-      call read_data ( unit, Ice%albedo_nir_dif)
-      call read_data ( unit, Ice%rough_mom     )
-      call read_data ( unit, Ice%rough_heat    )
-      call read_data ( unit, Ice%rough_moist   )
-      call close_file (unit)
-      call nullify_domain ()
-
   !--- if no restart then no ice ---
-   else
-
       need_ic = .true.
       Ice%t_surf      = TFREEZE   ! + temp_ice_freeze
       Ice%thickness   = 0.0       ! no ice initially
@@ -630,14 +624,13 @@ else
     ! fixed roughness
       call fixed_ocean_roughness ( Ice%mask, Ice%rough_mom, &
                                    Ice%rough_heat, Ice%rough_moist )
-   endif
 endif
 
   ! initialize mask where ice exists
     Ice%ice_mask = Ice%mask .and. Ice%thickness .ge. thickness_min
 
     call ice_albedo_init (TFREEZE)
-    
+
   ! analytic distribution with no ice
   ! melt all ice
     if (sst_method == "aqua_planet_1") then
@@ -715,8 +708,8 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               !Ice%t_surf(i,j) = 27. + TFREEZE + amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.))**2 
-               Ice%t_surf(i,j) = 297. + amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.))**2 
+               !Ice%t_surf(i,j) = 27. + TFREEZE + amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.))**2
+               Ice%t_surf(i,j) = 297. + amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.))**2
             endif
         enddo
         enddo
@@ -735,7 +728,7 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2) 
+               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2)
             endif
         enddo
         enddo
@@ -754,7 +747,7 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2) 
+               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2)
             endif
         enddo
         enddo
@@ -773,7 +766,7 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2) 
+               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2)
             endif
         enddo
         enddo
@@ -792,7 +785,7 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2) 
+               Ice%t_surf(i,j) = 297. + amp*EXP(-0.5*((dellon)**2.)/(siggy)**2)
             endif
         enddo
         enddo
@@ -812,7 +805,7 @@ endif
                dellon = Ice%lon(i,j)-lon0
                if (dellon >  pi) dellon = dellon - 2.*pi
                if (dellon < -pi) dellon = dellon + 2.*pi
-               Ice%t_surf(i,j) = 297. - amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.)) 
+               Ice%t_surf(i,j) = 297. - amp * cos(0.5*pi*min(max(dellon/lond,-1.),1.))
             endif
         enddo
         enddo
@@ -855,6 +848,216 @@ endif
            endif
         enddo
         enddo
+    else if (sst_method == "aqua_planet_20N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > pi/9.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-pi/9.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-pi/9.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_25N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 5.*pi/36.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-5.*pi/36.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-5.*pi/36.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_30N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > pi/6.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-pi/6.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-pi/6.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_35N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 7.*pi/36.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-7.*pi/36.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-7.*pi/36.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_40N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 2.*pi/9.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-2.*pi/9.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-2.*pi/9.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_45N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > pi/4.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-pi/4.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-pi/4.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_50N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 5.*pi/18.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-5.*pi/18.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-5.*pi/18.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_55N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 11.*pi/36.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-11.*pi/36.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-11.*pi/36.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_60N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > pi/3.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-pi/3.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-pi/3.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_65N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 13.*pi/36.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-13.*pi/36.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-13.*pi/36.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_70N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 7.*pi/18.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-7.*pi/18.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-7.*pi/18.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_75N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 5.*pi/12.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-5.*pi/12.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-5.*pi/12.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_80N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 4.*pi/9.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-4.*pi/9.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-4.*pi/9.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_85N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > 17.*pi/36.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-17.*pi/36.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-17.*pi/36.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
+    else if (sst_method == "aqua_planet_90N") then
+        ice_method = 'none'
+        Ice%ice_mask = .false.
+        do j = js, je
+        do i = is, ie
+           if (Ice%mask(i,j)) then
+              if (Ice%lat(i,j) > pi/2.) then
+                  Ice%t_surf(i,j) = 27.*(1.-sin(min(90./55.*(Ice%lat(i,j)-pi/2.),pi*0.5))**2) + TFREEZE
+              else
+                  Ice%t_surf(i,j) = 27.*(1.-sin(max(90./65.*(Ice%lat(i,j)-pi/2.),-pi*0.5))**2) + TFREEZE
+              endif
+           endif
+        enddo
+        enddo
     endif
 
 
@@ -863,11 +1066,11 @@ endif
   if (trim(ice_method) == 'prognostic' .or. &
       trim(ice_method) == 'uniform') then
       if (trim(interp_method) == "conservative") then
-          Amip_ice = amip_interp_new ( Ice%lon_bnd(:,1),     Ice%lat_bnd(1,:),  &
+          Amip_ice = fms_amip_interp_new ( Ice%lon_bnd(:,1),     Ice%lat_bnd(1,:),  &
                          Ice%mask(:,:), interp_method = interp_method, &
                     use_climo=use_climo_ice, use_annual=use_annual_ice )
       else if(trim(interp_method) == "bilinear") then
-          Amip_ice = amip_interp_new ( Ice%lon,     Ice%lat,          &
+          Amip_ice = fms_amip_interp_new ( Ice%lon,     Ice%lat,          &
                          Ice%mask(:,:), interp_method = interp_method, &
                     use_climo=use_climo_ice, use_annual=use_annual_ice )
       else
@@ -884,11 +1087,11 @@ endif
 
   if (trim(sst_method) == 'specified') then
       if (trim(interp_method) == "conservative") then
-          Amip_sst = amip_interp_new ( Ice%lon_bnd(:,1),     Ice%lat_bnd(1,:),  &
+          Amip_sst = fms_amip_interp_new ( Ice%lon_bnd(:,1),     Ice%lat_bnd(1,:),  &
                          Ice%mask(:,:), interp_method = interp_method, &
                     use_climo=use_climo_sst, use_annual=use_annual_sst )
       else if(trim(interp_method) == "bilinear") then
-          Amip_sst = amip_interp_new ( Ice%lon,     Ice%lat,          &
+          Amip_sst = fms_amip_interp_new ( Ice%lon,     Ice%lat,          &
                          Ice%mask(:,:), interp_method = interp_method, &
                     use_climo=use_climo_sst, use_annual=use_annual_sst )
       else
@@ -901,13 +1104,13 @@ endif
       endif
   endif
 
-print *, 'pe,count(ice,all,ocean)=',mpp_pe(),count(Ice%ice_mask),count(Ice%mask),count(Ice%mask .and. .not.Ice%ice_mask)
+print *, 'pe,count(ice,all,ocean)=',fms_mpp_pe(),count(Ice%ice_mask),count(Ice%mask),count(Ice%mask .and. .not.Ice%ice_mask)
 
 ! add on non-zero sea surface temperature perturbation (namelist option)
 ! this perturbation may be useful in accessing model sensitivities
 
   if ( abs(sst_anom) > 0.0001 ) then
-    Ice%t_surf(:,:) = Ice%t_surf(:,:) + sst_anom
+    Ice%t_surf(:,:) = Ice%t_surf(:,:) + fms_amip_interp_sst_anom
   endif
 
 !----------------------------------------------------------
@@ -918,65 +1121,37 @@ print *, 'pe,count(ice,all,ocean)=',mpp_pe(),count(Ice%ice_mask),count(Ice%mask)
 
  end subroutine ice_model_init
 
-!######################################################################
-!######## netcdf interface routines #########
-!######################################################################
+ subroutine ice_register_restart(fileobj, Ice)
 
- subroutine get_grid_size ( Fields, nlon, nlat )
- type(fieldtype), intent(in)  :: Fields(:)
- integer,         intent(out) :: nlon, nlat
- integer :: i, j, dimsiz(4)
- character(len=128) :: name
+ type(FmsNetcdfDomainFile_t), intent(inout) :: fileobj    !< Ice restart domain decomposed fileobj
+ type(ice_data_type), intent(inout)         :: Ice        !< Ice data type
+ character(len=8), dimension(3)             ::  dim_names !< Array of dimension names
 
-  nlon = 0; nlat = 0
-  do i = 1, size(Fields(:))
-     do j=1,128; name(j:j)=' '; enddo
-     call mpp_get_atts (Fields(i), name=name, siz=dimsiz)
-       select case (trim(name))
-          case ('geolon_t')
-             nlon= dimsiz(1); nlat = dimsiz(2)
-       end select
-  enddo
+ dim_names(1) = "xaxis_1"
+ dim_names(2) = "yaxis_1"
+ dim_names(3) = "Time"
 
- end subroutine get_grid_size
+ call fms2_io_register_axis(fileobj, dim_names(1), "x")
+ call fms2_io_register_axis(fileobj, dim_names(2), "y")
+ call fms2_io_register_axis(fileobj, dim_names(3), unlimited)
 
-!----------------------------------------------------------------------
+ !< Register the domain decomposed dimensions as variables so that the combiner can work
+ !! correctly
+ call fms2_io_register_field(fileobj, dim_names(1), "double", (/dim_names(1)/))
+ call fms2_io_register_field(fileobj, dim_names(2), "double", (/dim_names(2)/))
 
- subroutine read_grid_data ( unit, Fields, glonb, glatb, glon, glat, gmask )
- integer, intent(in) :: unit
- type(fieldtype), intent(in)  :: Fields(:)
- real,    intent(out) :: glonb(:), glatb(:)
- real,    intent(out) :: glon(:,:), glat(:,:)
- logical, intent(out) :: gmask(:,:)
- 
- integer :: i, m, n
- character(len=128) :: name
- real, dimension(size(glon,1)+1,size(glon,2)+1) :: data2d
+ call fms2_io_register_restart_field ( fileobj, 't_surf',         Ice%t_surf,         dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'thickness',      Ice%thickness,      dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'albedo',         Ice%albedo,         dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'albedo_vis_dir', Ice%albedo_vis_dir, dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'albedo_nir_dir', Ice%albedo_nir_dir, dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'albedo_vis_dif', Ice%albedo_vis_dif, dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'albedo_nir_dif', Ice%albedo_nir_dif, dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'rough_mom',      Ice%rough_mom,      dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'rough_heat',     Ice%rough_heat,     dim_names )
+ call fms2_io_register_restart_field ( fileobj, 'rough_moist',    Ice%rough_moist,    dim_names )
 
-      m = size(glon,1);  n= size(glon,2)
-
-      do i = 1, size(Fields(:))
-         call mpp_get_atts(Fields(i), name=name)
-         select case (trim(name))
-            case ('geolon_t')
-               call mpp_read(unit,Fields(i),glon)
-               glon = glon*pi/180.
-            case ('geolat_t')
-               call mpp_read(unit,Fields(i),glat)
-               glat = glat*pi/180.
-            case ('geolon_vert_t')
-               call mpp_read(unit,Fields(i),data2d)
-               glonb = data2d(:,1)*pi/180.
-            case('geolat_vert_t')
-               call mpp_read(unit,Fields(i),data2d)
-               glatb = data2d(1,:)*pi/180.
-            case('wet')
-               call mpp_read(unit,Fields(i),data2d(1:m,1:n))
-               gmask = data2d(1:m,1:n) .gt. 0.50
-         end select
-      enddo
-
- end subroutine read_grid_data
+ end subroutine ice_register_restart
 
 !######################################################################
 
@@ -984,48 +1159,25 @@ print *, 'pe,count(ice,all,ocean)=',mpp_pe(),count(Ice%ice_mask),count(Ice%mask)
  type(ice_data_type), intent(inout) :: Ice
  integer :: unit
  character(len=64) :: fname='RESTART/ice_model.res.nc'
+ type(FmsNetcdfDomainFile_t) :: ice_restart_fileobj !< Ice restart domain decomposed fileobj
 
  if (.not.module_is_initialized) return
  if( do_netcdf_restart) then
 
-    if(mpp_pe() == mpp_root_pe() ) then
+    if(fms_mpp_pe() == fms_mpp_root_pe() ) then
        call error_mesg ('ice_model_mod', 'Writing NetCDF formatted restart file: RESTART/ice_model.res.nc', NOTE)
-    endif   
-    call write_data(fname, 'mlon', size(Ice%gmask,1), Ice%Domain)
-    call write_data(fname, 'mlat', size(Ice%gmask,2), Ice%Domain)
-    
-    call write_data ( fname, 't_surf',         Ice%t_surf,         Ice%Domain )
-    call write_data ( fname, 'thickness',      Ice%thickness,      Ice%Domain )
-    call write_data ( fname, 'albedo',         Ice%albedo,         Ice%Domain )
-    call write_data ( fname, 'albedo_vis_dir', Ice%albedo_vis_dir, Ice%Domain )
-    call write_data ( fname, 'albedo_nir_dir', Ice%albedo_nir_dir, Ice%Domain )
-    call write_data ( fname, 'albedo_vis_dif', Ice%albedo_vis_dif, Ice%Domain )
-    call write_data ( fname, 'albedo_nir_dif', Ice%albedo_nir_dif, Ice%Domain )
-    call write_data ( fname, 'rough_mom',      Ice%rough_mom,      Ice%Domain )
-    call write_data ( fname, 'rough_heat',     Ice%rough_heat,     Ice%Domain )
-    call write_data ( fname, 'rough_moist',    Ice%rough_moist,    Ice%Domain )
- else
-    if (mpp_pe() == mpp_root_pe()) then
-       call error_mesg ('ice_model_mod', 'Writing native formatted restart file.', NOTE)
-    endif
-    unit = open_restart_file ('RESTART/ice_model.res', 'write')
-    if ( mpp_pe() == mpp_root_pe() ) then
-       write (unit) size(Ice%gmask,1), size(Ice%gmask,2)
     endif
 
-    call set_domain (Ice%Domain)
-    call write_data ( unit, Ice%t_surf        )
-    call write_data ( unit, Ice%thickness     )
-    call write_data ( unit, Ice%albedo        )
-    call write_data ( unit, Ice%albedo_vis_dir)
-    call write_data ( unit, Ice%albedo_nir_dir)
-    call write_data ( unit, Ice%albedo_vis_dif)
-    call write_data ( unit, Ice%albedo_nir_dif)
-    call write_data ( unit, Ice%rough_mom     )
-    call write_data ( unit, Ice%rough_heat    )
-    call write_data ( unit, Ice%rough_moist   )
-    call close_file ( unit )
-    call nullify_domain ()
+    if (fms2_io_open_file(ice_restart_fileobj, fname, 'overwrite', Ice%domain, is_restart=.true.)) then
+        call ice_register_restart(ice_restart_fileobj, Ice)
+        call fms2_io_register_field(ice_restart_fileobj, "mlon", "double")
+        call fms2_io_register_field(ice_restart_fileobj, "mlat", "double")
+        call fms2_io_write_restart(ice_restart_fileobj)
+        call fms2_io_write_data(ice_restart_fileobj, 'mlon', size(Ice%gmask,1))
+        call fms2_io_write_data(ice_restart_fileobj, 'mlat', size(Ice%gmask,2))
+        call add_domain_dimension_data(ice_restart_fileobj)
+        call fms2_io_close_file(ice_restart_fileobj)
+    endif !< if(fms2_io_open_file)
  endif
 
 
@@ -1038,6 +1190,21 @@ print *, 'pe,count(ice,all,ocean)=',mpp_pe(),count(Ice%ice_mask),count(Ice%mask)
   module_is_initialized = .false.
 
  end subroutine ice_model_end
+
+ !< Add_dimension_data: Adds dummy data for the domain decomposed axis
+ subroutine add_domain_dimension_data(fileobj)
+  type(FmsNetcdfDomainFile_t) :: fileobj !< Fms2io domain decomposed fileobj
+  integer, dimension(:), allocatable :: buffer !< Buffer with axis data
+  integer :: is, ie !< Starting and Ending indices for data
+
+    call fms2_io_get_global_io_domain_indices(fileobj, "xaxis_1", is, ie, indices=buffer)
+    call fms2_io_write_data(fileobj, "xaxis_1", buffer)
+    deallocate(buffer)
+
+    call fms2_io_get_global_io_domain_indices(fileobj, "yaxis_1", is, ie, indices=buffer)
+    call fms2_io_write_data(fileobj, "yaxis_1", buffer)
+    deallocate(buffer)
+ end subroutine add_domain_dimension_data
 
 !######################################################################
 !               Routines added for computing then
@@ -1052,7 +1219,7 @@ real, intent(in) :: lon(:,:), lat(:,:)
 !
 
 logical :: is_latlon
-integer :: i, j 
+integer :: i, j
 
   is_latlon = .true.
 
@@ -1170,6 +1337,6 @@ end function is_latlon
   end subroutine xyz2latlon
 
 !######################################################################
- 
+
 end module ice_model_mod
 

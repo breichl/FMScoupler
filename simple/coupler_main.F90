@@ -1,10 +1,30 @@
-
+!***********************************************************************
+!*                   GNU Lesser General Public License
+!*
+!* This file is part of the GFDL Flexible Modeling System (FMS) Coupler.
+!*
+!* FMS Coupler is free software: you can redistribute it and/or modify
+!* it under the terms of the GNU Lesser General Public License as
+!* published by the Free Software Foundation, either version 3 of the
+!* License, or (at your option) any later version.
+!*
+!* FMS Coupler is distributed in the hope that it will be useful, but
+!* WITHOUT ANY WARRANTY; without even the implied warranty of
+!* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+!* General Public License for more details.
+!*
+!* You should have received a copy of the GNU Lesser General Public
+!* License along with FMS Coupler.
+!* If not, see <http://www.gnu.org/licenses/>.
+!***********************************************************************
+!> \file
+!> \brief Couples component models for the atmosphere,
+!!  ocean (amip), land, and sea-ice using the exchange module. Simplified version
+!! of [**full/coupler_main.F90**](full_2coupler__main_8_f90.html)
 program coupler_main
 
 !-----------------------------------------------------------------------
 !
-!   program that couples component models for the atmosphere,
-!   ocean (amip), land, and sea-ice using the exchange module
 !
 !-----------------------------------------------------------------------
 
@@ -34,51 +54,19 @@ use ice_model_mod,      only: ice_model_init, ice_model_end,  &
                               atmos_ice_boundary_type
                              !land_ice_boundary_type
 
-!--- FMS modules
-use constants_mod,      only: constants_init
-
-use data_override_mod,  only: data_override_init
-
-use diag_manager_mod,   only: diag_manager_init, diag_manager_end, &
-                              get_base_date, diag_manager_set_time_end
-
-use field_manager_mod,  only: MODEL_ATMOS, MODEL_LAND, MODEL_ICE
-
 use flux_exchange_mod,  only: flux_exchange_init,   &
                               sfc_boundary_layer,   &
                               flux_down_from_atmos, &
-                              flux_up_to_atmos,     &
-                              flux_exchange_end       ! may not be used?
+                              flux_up_to_atmos!,     &
+                              !flux_exchange_end       ! may not be used?
+!--- FMS modules
+use FMS
+use FMSconstants, only: fmsconstants_init
 
-use fms_affinity_mod,   only: fms_affinity_init, fms_affinity_set
-
-use fms_mod,            only: open_namelist_file, file_exist, check_nml_error,  &
-                              error_mesg, fms_init, fms_end, close_file,        &
-                              write_version_number, uppercase, stdout
-
-use fms_io_mod,         only: fms_io_exit
-
-use mpp_mod,            only: mpp_init, mpp_pe, mpp_root_pe, mpp_npes, mpp_get_current_pelist, &
-                              stdlog, mpp_error, NOTE, FATAL, WARNING
-use mpp_mod,            only: mpp_clock_id, mpp_clock_begin, mpp_clock_end
-
-use mpp_mod,            only: mpp_chksum, mpp_set_current_pelist
-
-use mpp_domains_mod,    only: mpp_get_global_domain, mpp_global_field, CORNER, mpp_set_domain_symmetry
-
-use mpp_io_mod,         only: mpp_open, mpp_close, &
-                              MPP_NATIVE, MPP_RDONLY, MPP_DELETE
-
-use time_manager_mod,   only: time_type, set_calendar_type, set_time,  &
-                              set_date, days_in_month, month_name,     &
-                              operator(+), operator (<), operator (>), &
-                              operator (/=), operator (/), get_date,   &
-                              operator (*), THIRTY_DAY_MONTHS, JULIAN, &
-                              NOLEAP, NO_CALENDAR
-
-use tracer_manager_mod, only: tracer_manager_init, get_tracer_index, &
-                              get_number_tracers, get_tracer_names,  &
-                              NO_TRACER
+!--- FMS old io
+#ifdef use_deprecated_io
+use fms_io_mod, only: fms_io_exit!< This can't be removed until fms_io is not used at all
+#endif
 
 implicit none
 
@@ -109,7 +97,7 @@ implicit none
 !-----------------------------------------------------------------------
 ! ----- coupled model time -----
 
-   type (time_type) :: Time_atmos, Time_init, Time_end,  &
+   type (FmsTime_type) :: Time_atmos, Time_init, Time_end,  &
                        Time_step_atmos, Time_step_ocean
    integer :: num_cpld_calls, num_atmos_calls, nc, na
 
@@ -125,16 +113,24 @@ implicit none
 
 !-----------------------------------------------------------------------
 
-   integer, dimension(6) :: current_date = (/ 0, 0, 0, 0, 0, 0 /)
-   character(len=17) :: calendar = '                 '
-   logical :: force_date_from_namelist = .false.  ! override restart values for date
-   integer :: months=0, days=0, hours=0, minutes=0, seconds=0
+   integer, dimension(6) :: current_date     = (/ 0, 0, 0, 0, 0, 0 /) !< The date that the current integration starts with.  (See
+                                                                      !! force_date_from_namelist.)
+   character(len=17) :: calendar = '                 ' !< The calendar type used by the current integration.  Valid values are
+                                                       !! consistent with the time_manager module: 'gregorian', 'julian', 'noleap', or 'thirty_day'.
+                                                       !! The value 'no_calendar' cannot be used because the time_manager's date
+                                                       !! functions are used.  All values must be lower case.
+   logical :: force_date_from_namelist = .false.  !> override restart values for date
+   integer :: months=0  !< Number of months the current integration will be run
+   integer :: days=0    !< Number of days the current integration will be run
+   integer :: hours=0   !< Number of hours the current integration will be run
+   integer :: minutes=0 !< Number of minutes the current integration will be run
+   integer :: seconds=0 !< Number of seconds the current integration will be run
    integer :: dt_atmos = 0
    integer :: dt_ocean = 0
    integer :: atmos_nthreads = 1
 
-   logical :: do_chksum = .FALSE.  !! If .TRUE., do multiple checksums throughout the execution of the model.
-   logical :: do_land = .FALSE. !! If true, will call update_land_model_fast
+   logical :: do_chksum = .FALSE. !< If .TRUE., do multiple checksums throughout the execution of the model.
+   logical :: do_land = .FALSE.   !< If true, will call update_land_model_fast
    logical :: use_hyper_thread = .false.
 
    namelist /coupler_nml/ current_date, calendar, force_date_from_namelist, &
@@ -145,21 +141,21 @@ implicit none
 !#######################################################################
 
    call fms_init()
-   call mpp_init()
-   initClock = mpp_clock_id( 'Initialization' )
-   mainClock = mpp_clock_id( 'Main loop' )
-   termClock = mpp_clock_id( 'Termination' )
-   call mpp_clock_begin (initClock)
-  
+   call fms_mpp_init()
+   initClock = fms_mpp_clock_id( 'Initialization' )
+   mainClock = fms_mpp_clock_id( 'Main loop' )
+   termClock = fms_mpp_clock_id( 'Termination' )
+   call fms_mpp_clock_begin (initClock)
+
    call fms_init
-   call constants_init
+   call fmsconstants_init
    call fms_affinity_init
 
    call coupler_init
    if (do_chksum) call coupler_chksum('coupler_init+', 0)
 
-   call mpp_clock_end (initClock) !end initialization
-   call mpp_clock_begin(mainClock) !begin main loop
+   call fms_mpp_clock_end (initClock) !end initialization
+   call fms_mpp_clock_begin(mainClock) !begin main loop
 
 
    !------ ocean/slow-ice integration loop ------
@@ -199,7 +195,7 @@ implicit none
        if (do_land ) then
          call update_land_model_fast ( Atmos_land_boundary, Land )
          if (do_chksum) call coupler_chksum('update_land+', na)
-       endif 
+       endif
 
        !--- fast phase ice
        call update_ice_model_fast  ( Atmos_ice_boundary,  Ice  )
@@ -236,34 +232,34 @@ implicit none
 
 !-----------------------------------------------------------------------
 
-   call mpp_clock_end(mainClock)
-   call mpp_clock_begin(termClock)
+   call fms_mpp_clock_end(mainClock)
+   call fms_mpp_clock_begin(termClock)
 
    call coupler_end
-   call mpp_clock_end(termClock)
+   call fms_mpp_clock_end(termClock)
 
    call fms_end
 
 !-----------------------------------------------------------------------
 
-   stop
-
 contains
 
 !#######################################################################
 
+  !> reads namelist and restart files, initializes all defined exchange grids and all boundary maps
   subroutine coupler_init
 
-!-----------------------------------------------------------------------
-!   initialize all defined exchange grids and all boundary maps
-!-----------------------------------------------------------------------
-    integer :: total_days, total_seconds, unit, ierr, io
+    integer :: total_days, total_seconds, ierr, io
     integer :: n, gnlon, gnlat
     integer :: date(6), flags
-    type (time_type) :: Run_length
+    type (FmsTime_type) :: Run_length
     character(len=9) :: month
     logical :: use_namelist
-    
+
+    character(len=:), dimension(:), allocatable :: restart_file !< Restart file saved as a string
+    integer :: time_stamp_unit !< Unif of the time_stamp file
+    integer :: ascii_unit  !< Unit of a dummy ascii file
+
     logical, allocatable, dimension(:,:) :: mask
     real,    allocatable, dimension(:,:) :: glon_bnd, glat_bnd
 !-----------------------------------------------------------------------
@@ -272,46 +268,29 @@ contains
 !----- read namelist -------
 !----- for backwards compatibilty read from file coupler.nml -----
 
-    if (file_exist('input.nml')) then
-      unit = open_namelist_file ()
-    else
-      call error_mesg ('program coupler',  &
-                       'namelist file input.nml does not exist', FATAL)
-    endif
-   
-    ierr=1
-    do while (ierr /= 0)
-      read  (unit, nml=coupler_nml, iostat=io, end=10)
-      ierr = check_nml_error (io, 'coupler_nml')
-    enddo
-10  call close_file (unit)
+    read (fms_mpp_input_nml_file, nml=coupler_nml, iostat=io)
+    ierr = check_nml_error(io, 'coupler_nml')
 
 !----- write namelist to logfile -----
 
-    call write_version_number (version, tag)
-    if (mpp_pe() == mpp_root_pe()) write(stdlog(),nml=coupler_nml)
+    call fms_write_version_number (version, tag)
+    if (fms_mpp_pe() == fms_mpp_root_pe()) write(fms_mpp_stdlog(),nml=coupler_nml)
 
 !----- allocate and set the pelist (to the global pelist) -----
-    allocate( Atm%pelist  (mpp_npes()) )
-    call mpp_get_current_pelist(Atm%pelist)
+    allocate( Atm%pelist  (fms_mpp_npes()) )
+    call fms_mpp_get_current_pelist(Atm%pelist)
 
 !----- read restart file -----
 
-    if (file_exist('INPUT/coupler.res')) then
-       call mpp_open( unit, 'INPUT/coupler.res', action=MPP_RDONLY )
-       read (unit,*,err=999) calendar_type
-       read (unit,*) date_init
-       read (unit,*) date
-       goto 998 !back to fortran-4
-     ! read old-style coupler.res
-   999 call mpp_close (unit)
-       call mpp_open (unit, 'INPUT/coupler.res', action=MPP_RDONLY, form=MPP_NATIVE)
-       read (unit) calendar_type
-       read (unit) date
-   998 call mpp_close(unit)
+    if (fms2_io_file_exists('INPUT/coupler.res')) then
+       call fms2_io_ascii_read('INPUT/coupler.res', restart_file)
+       read(restart_file(1), *) calendar_type
+       read(restart_file(2), *) date_init
+       read(restart_file(3), *) date
+       deallocate(restart_file)
     else
        force_date_from_namelist = .true.
-    endif       
+    endif
 
 !----- use namelist value (either no restart or override flag on) ---
 
@@ -326,7 +305,9 @@ contains
 
 !----- override calendar type with namelist value -----
 
-      select case( uppercase(trim(calendar)) )
+      select case( fms_mpp_uppercase(trim(calendar)) )
+      case( 'GREGORIAN' )
+          calendar_type = GREGORIAN
       case( 'JULIAN' )
           calendar_type = JULIAN
       case( 'NOLEAP' )
@@ -336,21 +317,21 @@ contains
       case( 'NO_CALENDAR' )
           calendar_type = NO_CALENDAR
       case default
-          call mpp_error ( FATAL, 'COUPLER_MAIN: coupler_nml entry calendar must '// &
-                                  'be one of JULIAN|NOLEAP|THIRTY_DAY|NO_CALENDAR.' )
+          call fms_mpp_error ( FATAL, 'COUPLER_MAIN: coupler_nml entry calendar must '// &
+                                  'be one of GREGORIAN|JULIAN|NOLEAP|THIRTY_DAY|NO_CALENDAR.' )
       end select
 
     endif
 
-    call set_calendar_type (calendar_type)
+    call fms_time_manager_set_calendar_type (calendar_type)
 
 !----- write current/initial date actually used to logfile file -----
 
-    if ( mpp_pe() == mpp_root_pe() ) then
-      write (stdlog(),16) date(1),trim(month_name(date(2))),date(3:6)
+    if ( fms_mpp_pe() == fms_mpp_root_pe() ) then
+      write (fms_mpp_stdlog(),16) date(1),trim(fms_time_manager_month_name(date(2))),date(3:6)
     endif
 
- 16 format ('  current date used = ',i4,1x,a,2i3,2(':',i2.2),' gmt') 
+ 16 format ('  current date used = ',i4,1x,a,2i3,2(':',i2.2),' gmt')
 
     !--- setting affinity
 !$  call fms_affinity_set('ATMOS', use_hyper_thread, atmos_nthreads)
@@ -359,11 +340,11 @@ contains
 !-----------------------------------------------------------------------
 !------ initialize diagnostics manager ------
 
-    call diag_manager_init
+    call fms_diag_init
 
 !----- always override initial/base date with diag_manager value -----
 
-    call get_base_date ( date_init(1), date_init(2), date_init(3), &
+    call fms_diag_get_base_date ( date_init(1), date_init(2), date_init(3), &
                          date_init(4), date_init(5), date_init(6)  )
 
 !----- use current date if no base date ------
@@ -372,10 +353,10 @@ contains
 
 !----- set initial and current time types ------
 
-    Time_init  = set_date (date_init(1), date_init(2), date_init(3), &
+    Time_init  = fms_time_manager_set_date (date_init(1), date_init(2), date_init(3), &
                            date_init(4), date_init(5), date_init(6))
 
-    Time_atmos = set_date (date(1), date(2), date(3),  &
+    Time_atmos = fms_time_manager_set_date (date(1), date(2), date(3),  &
                            date(4), date(5), date(6))
 
 !-----------------------------------------------------------------------
@@ -390,41 +371,40 @@ contains
     Time_end = Time_atmos
     total_days = 0
     do n = 1, months
-      total_days = total_days + days_in_month(Time_end)
-      Time_end = Time_atmos + set_time (0,total_days)
+      total_days = total_days + fms_time_manager_days_in_month(Time_end)
+      Time_end = Time_atmos + fms_time_manager_set_time (0,total_days)
     enddo
 
     total_days    = total_days + days
     total_seconds = hours*3600 + minutes*60 + seconds
-    Run_length    = set_time (total_seconds,total_days)
+    Run_length    = fms_time_manager_set_time (total_seconds,total_days)
     Time_end      = Time_atmos + Run_length
 
     !Need to pass Time_end into diag_manager for multiple thread case.
-    call diag_manager_set_time_end(Time_end)
+    call fms_diag_set_time_end(Time_end)
 
 
 !-----------------------------------------------------------------------
 !----- write time stamps (for start time and end time) ------
-   
-    call mpp_open( unit, 'time_stamp.out', nohdrs=.TRUE. )
+    if ( fms_mpp_pe().EQ.fms_mpp_root_pe() ) open(newunit = time_stamp_unit, file='time_stamp.out', status='replace', form='formatted')
 
-    month = month_name(date(2))
-    if ( mpp_pe() == mpp_root_pe() ) write (unit,20) date, month(1:3)
+    month = fms_time_manager_month_name(date(2))
+    if ( fms_mpp_pe() == fms_mpp_root_pe() ) write (time_stamp_unit,20) date, month(1:3)
 
-    call get_date (Time_end, date(1), date(2), date(3),  &
+    call fms_time_manager_get_date (Time_end, date(1), date(2), date(3),  &
                              date(4), date(5), date(6))
-    month = month_name(date(2))
-    if ( mpp_pe() == mpp_root_pe() ) write (unit,20) date, month(1:3)
+    month = fms_time_manager_month_name(date(2))
+    if ( fms_mpp_pe() == fms_mpp_root_pe() ) write (time_stamp_unit,20) date, month(1:3)
 
-    call mpp_close (unit)
+    if ( fms_mpp_pe().EQ.fms_mpp_root_pe() ) close (time_stamp_unit)
 
  20 format (6i4,2x,a3)
 
 !-----------------------------------------------------------------------
 !----- compute the time steps ------
 
-    Time_step_atmos = set_time (dt_atmos,0)
-    Time_step_ocean = set_time (dt_ocean,0)
+    Time_step_atmos = fms_time_manager_set_time (dt_atmos,0)
+    Time_step_ocean = fms_time_manager_set_time (dt_ocean,0)
     num_cpld_calls  = Run_length / Time_step_ocean
     num_atmos_calls = Time_step_ocean / Time_step_atmos
 
@@ -454,12 +434,12 @@ contains
     call  atmos_model_init (Atm,  Time_init, Time_atmos, Time_step_atmos, &
            .false.) ! do_concurrent_radiation
 
-    call mpp_get_global_domain(Atm%Domain, xsize=gnlon, ysize=gnlat)
+    call fms_mpp_domains_get_global_domain(Atm%Domain, xsize=gnlon, ysize=gnlat)
     allocate ( glon_bnd(gnlon+1,gnlat+1), glat_bnd(gnlon+1,gnlat+1) )
-    call mpp_set_domain_symmetry(Atm%Domain, .true.)
-    call mpp_global_field(Atm%Domain, Atm%lon_bnd, glon_bnd, position=CORNER)
-    call mpp_global_field(Atm%Domain, Atm%lat_bnd, glat_bnd, position=CORNER)
-    call mpp_set_domain_symmetry(Atm%Domain, .false.)
+    call fms_mpp_domains_set_domain_symmetry(Atm%Domain, .true.)
+    call fms_mpp_domains_global_field(Atm%Domain, Atm%lon_bnd, glon_bnd, position=CORNER)
+    call fms_mpp_domains_global_field(Atm%Domain, Atm%lat_bnd, glat_bnd, position=CORNER)
+    call fms_mpp_domains_set_domain_symmetry(Atm%Domain, .false.)
 
     call   land_model_init (Atmos_land_boundary, Land, &
                             Time_init, Time_atmos, Time_step_atmos, Time_step_ocean, &
@@ -471,9 +451,10 @@ contains
     call    ice_model_init (Ice,  Time_init, Time_atmos, Time_step_atmos, Time_step_ocean, &
                             glon_bnd, glat_bnd, atmos_domain=Atm%Domain)
 
-    call data_override_init ( ) ! Atm_domain_in  = Atm%domain, &
-                                ! Ice_domain_in  = Ice%domain, &
-                                ! Land_domain_in = Land%domain )
+!------ initialize data_override -----
+    call fms_data_override_init(Atm_domain_in = Atm%domain)
+    call fms_data_override_init(Ice_domain_in = Ice%domain)
+    call fms_data_override_init(Land_domain_in = Land%domain)
 
 !------------------------------------------------------------------------
 !---- setup allocatable storage for fluxes exchanged between models ----
@@ -484,29 +465,28 @@ contains
                              atmos_ice_boundary,         &
                              land_ice_atmos_boundary     )
 
-
-
-
 !-----------------------------------------------------------------------
 !---- open and close dummy file in restart dir to check if dir exists --
-
-    call mpp_open( unit, 'RESTART/file' )
-    call mpp_close(unit, MPP_DELETE)
+    if ( fms_mpp_pe().EQ.fms_mpp_root_pe() ) then
+       open(newunit = ascii_unit, file='RESTART/file', status='replace', form='formatted')
+       close(ascii_unit,status="delete")
+    endif
 
 !-----------------------------------------------------------------------
 
   end subroutine coupler_init
 
 !#######################################################################
-
+  !> Finalizes a run and writes restart files
   subroutine coupler_end
 
-    integer :: unit, date(6)
+    integer :: date(6)
+    integer :: restart_unit !< Unit for the coupler restart file
 !-----------------------------------------------------------------------
 
 !----- compute current date ------
 
-    call get_date (Time_atmos, date(1), date(2), date(3),  &
+    call fms_time_manager_get_date (Time_atmos, date(1), date(2), date(3),  &
                                date(4), date(5), date(6))
 
 !----- check time versus expected ending time ----
@@ -516,15 +496,16 @@ contains
 
 !----- write restart file ------
 
-    call mpp_open( unit, 'RESTART/coupler.res', nohdrs=.TRUE. )
-    if (mpp_pe() == mpp_root_pe())then
-       write( unit, '(i6,8x,a)' )calendar_type, &
+    if (fms_mpp_pe() == fms_mpp_root_pe())then
+       open(newunit = restart_unit, file='RESTART/coupler.res', status='replace', form='formatted')
+       write(restart_unit, '(i6,8x,a)' )calendar_type, &
             '(Calendar: no_calendar=0, thirty_day_months=1, julian=2, gregorian=3, noleap=4)'
 
-       write( unit, '(6i6,8x,a)' )date_init, &
+       write(restart_unit, '(6i6,8x,a)' )date_init, &
             'Model start time:   year, month, day, hour, minute, second'
-       write( unit, '(6i6,8x,a)' )date, &
+       write(restart_unit, '(6i6,8x,a)' )date, &
             'Current model time: year, month, day, hour, minute, second'
+       close(restart_unit)
     endif
 
 
@@ -532,11 +513,11 @@ contains
     call atmos_model_end (Atm)
     call  land_model_end (Atmos_land_boundary, Land)
     call   ice_model_end (Ice)
-
-    call diag_manager_end (Time_atmos)
-
+    
+    call fms_diag_end (Time_atmos)
+#ifdef use_deprecated_io
     call  fms_io_exit
-    call mpp_close(unit)
+#endif
 
 ! call flux_exchange_end (Atm)
 
@@ -560,9 +541,9 @@ contains
     type(tracer_ind_type), allocatable :: tr_table(:)
     character(32) :: tr_name
 
-    call get_number_tracers (MODEL_ATMOS, num_tracers=n_atm_tr_tot, &
+    call fms_tracer_manager_get_number_tracers (MODEL_ATMOS, num_tracers=n_atm_tr_tot, &
                              num_prog=n_atm_tr)
-    call get_number_tracers (MODEL_LAND, num_tracers=n_lnd_tr_tot, &
+    call fms_tracer_manager_get_number_tracers (MODEL_LAND, num_tracers=n_lnd_tr_tot, &
                              num_prog=n_lnd_tr)
 
     ! Assemble the table of tracer number translation by matching names of
@@ -571,10 +552,10 @@ contains
     allocate(tr_table(n_atm_tr))
     n = 1
     do i = 1,n_atm_tr
-       call get_tracer_names( MODEL_ATMOS, i, tr_name )
+       call fms_tracer_manager_get_tracer_names( MODEL_ATMOS, i, tr_name )
        tr_table(n)%atm = i
-       tr_table(n)%ice = get_tracer_index ( MODEL_ICE,  tr_name )
-       tr_table(n)%lnd = get_tracer_index ( MODEL_LAND, tr_name )
+       tr_table(n)%ice = fms_tracer_manager_get_tracer_index ( MODEL_ICE,  tr_name )
+       tr_table(n)%lnd = fms_tracer_manager_get_tracer_index ( MODEL_LAND, tr_name )
       if (tr_table(n)%ice/=NO_TRACER .or. tr_table(n)%lnd/=NO_TRACER) n = n+1
     enddo
     n_exch_tr = n-1
@@ -583,27 +564,27 @@ contains
 101 FORMAT("CHECKSUM::",A16,a,'%',a," = ",Z20)
 
 
-    outunit = stdout()
+    outunit = fms_mpp_stdout()
     write(outunit,*) 'BEGIN CHECKSUM(Atm):: ', id, timestep
-    write(outunit,100) 'atm%t_bot', mpp_chksum(atm%t_bot)
-    write(outunit,100) 'atm%z_bot', mpp_chksum(atm%z_bot)
-    write(outunit,100) 'atm%p_bot', mpp_chksum(atm%p_bot)
-    write(outunit,100) 'atm%u_bot', mpp_chksum(atm%u_bot)
-    write(outunit,100) 'atm%v_bot', mpp_chksum(atm%v_bot)
-    write(outunit,100) 'atm%p_surf', mpp_chksum(atm%p_surf)
-    write(outunit,100) 'atm%gust', mpp_chksum(atm%gust)
+    write(outunit,100) 'atm%t_bot', fms_mpp_chksum(atm%t_bot)
+    write(outunit,100) 'atm%z_bot', fms_mpp_chksum(atm%z_bot)
+    write(outunit,100) 'atm%p_bot', fms_mpp_chksum(atm%p_bot)
+    write(outunit,100) 'atm%u_bot', fms_mpp_chksum(atm%u_bot)
+    write(outunit,100) 'atm%v_bot', fms_mpp_chksum(atm%v_bot)
+    write(outunit,100) 'atm%p_surf', fms_mpp_chksum(atm%p_surf)
+    write(outunit,100) 'atm%gust', fms_mpp_chksum(atm%gust)
     do tr = 1,n_exch_tr
        n = tr_table(tr)%atm
       if (n /= NO_TRACER) then
-          call get_tracer_names( MODEL_ATMOS, tr_table(tr)%atm, tr_name )
-          write(outunit,100) 'atm%'//trim(tr_name), mpp_chksum(Atm%tr_bot(:,:,n))
+          call fms_tracer_manager_get_tracer_names( MODEL_ATMOS, tr_table(tr)%atm, tr_name )
+          write(outunit,100) 'atm%'//trim(tr_name), fms_mpp_chksum(Atm%tr_bot(:,:,n))
        endif
     enddo
 
-    write(outunit,100) 'ice%t_surf', mpp_chksum(ice%t_surf)
-    write(outunit,100) 'ice%rough_mom', mpp_chksum(ice%rough_mom)
-    write(outunit,100) 'ice%rough_heat', mpp_chksum(ice%rough_heat)
-    write(outunit,100) 'ice%rough_moist', mpp_chksum(ice%rough_moist)
+    write(outunit,100) 'ice%t_surf', fms_mpp_chksum(ice%t_surf)
+    write(outunit,100) 'ice%rough_mom', fms_mpp_chksum(ice%rough_mom)
+    write(outunit,100) 'ice%rough_heat', fms_mpp_chksum(ice%rough_heat)
+    write(outunit,100) 'ice%rough_moist', fms_mpp_chksum(ice%rough_moist)
     write(outunit,*) 'STOP CHECKSUM(Atm):: ', id, timestep
 
     deallocate(tr_table)
