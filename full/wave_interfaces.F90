@@ -67,11 +67,11 @@ contains
     call fms_mpp_domains_get_compute_domain( Wav%domain, is, ie, js, je )
 
     !allocate land_ice_boundary
-    allocate( atmos_wave_boundary%wavgrd_u10_mpp(is:ie,js:je,1) )
-    allocate( atmos_wave_boundary%wavgrd_v10_mpp(is:ie,js:je,1) )
+    allocate( atmos_wave_boundary%wavgrd_u10n_mpp(is:ie,js:je,1) )
+    allocate( atmos_wave_boundary%wavgrd_v10n_mpp(is:ie,js:je,1) )
 
-    atmos_wave_boundary%wavgrd_u10_mpp(:,:,:) = 0.0
-    atmos_wave_boundary%wavgrd_v10_mpp(:,:,:) = 0.0
+    atmos_wave_boundary%wavgrd_u10n_mpp(:,:,:) = 0.0
+    atmos_wave_boundary%wavgrd_v10n_mpp(:,:,:) = 0.0
 
   end subroutine atm_wave_exchange_init
 
@@ -90,28 +90,36 @@ contains
     n_xgrid_ice_wav = max(fms_xgrid_count(xmap_ice_wav),1)
     call fms_mpp_domains_get_compute_domain( Wav%domain, is, ie, js, je )
 
-    !allocate land_ice_boundary
+    !allocate wave_ice_boundary
     allocate( ice_wave_boundary%wavgrd_ucurr_mpp(is:ie,js:je,1) )
     ice_wave_boundary%wavgrd_ucurr_mpp(:,:,:) = 0.0
     allocate( ice_wave_boundary%wavgrd_vcurr_mpp(is:ie,js:je,1) )
     ice_wave_boundary%wavgrd_vcurr_mpp(:,:,:) = 0.0
 
-    allocate( wav%ustkb_mpp(is:ie,js:je,wav%num_stk_bands) )
-    wav%ustkb_mpp(:,:,:) = 0.0
-    allocate( wav%vstkb_mpp(is:ie,js:je,wav%num_stk_bands) )
-    wav%vstkb_mpp(:,:,:) = 0.0
+    !allocate( wav%ustkb_mpp(is:ie,js:je,wav%num_stk_bands) )
+    !wav%ustkb_mpp(:,:,:) = 0.0
+    !allocate( wav%vstkb_mpp(is:ie,js:je,wav%num_stk_bands) )
+    !wav%vstkb_mpp(:,:,:) = 0.0
+    !allocate( wav%ustktail_mpp(is:ie,js:je) )
+    !wav%ustktail_mpp(:,:) = 0.0
+    !allocate( wav%vstktail_mpp(is:ie,js:je) )
+    !wav%vstktail_mpp(:,:) = 0.0
 
     ! This are a temporary and costly trick to make MPI work
-    allocate( wav%glob_loc_X(is:ie,js:je) )
-    wav%glob_loc_X(:,:) = 0
-    allocate( wav%glob_loc_Y(is:ie,js:je) )
-    wav%glob_loc_Y(:,:) = 0
+    !allocate( wav%glob_loc_X(is:ie,js:je) )
+    !wav%glob_loc_X(:,:) = 0
+    !allocate( wav%glob_loc_Y(is:ie,js:je) )
+    !wav%glob_loc_Y(:,:) = 0
 
     call fms_mpp_domains_get_compute_domain( Ice%domain, is, ie, js, je )
     allocate( ice_wave_boundary%icegrd_ustkb_mpp(is:ie,js:je,1,wav%num_stk_bands) )
     ice_wave_boundary%icegrd_ustkb_mpp(:,:,:,:) = 0.0
     allocate( ice_wave_boundary%icegrd_vstkb_mpp(is:ie,js:je,1,wav%num_stk_bands) )
     ice_wave_boundary%icegrd_vstkb_mpp(:,:,:,:) = 0.0
+    allocate( ice_wave_boundary%icegrd_ustktail_mpp(is:ie,js:je,1) )
+    ice_wave_boundary%icegrd_ustktail_mpp(:,:,:) = 0.0
+    allocate( ice_wave_boundary%icegrd_vstktail_mpp(is:ie,js:je,1) )
+    ice_wave_boundary%icegrd_vstktail_mpp(:,:,:) = 0.0
 
     return
   end subroutine ice_wave_exchange_init
@@ -134,8 +142,8 @@ contains
     call fms_xgrid_put_to_xgrid (Atm%u_bot , 'ATM', ex_u_atm , xmap_atm_wav, remap_method=remap_method, complete=.false.)
     call fms_xgrid_put_to_xgrid (Atm%v_bot , 'ATM', ex_v_atm , xmap_atm_wav, remap_method=remap_method, complete=.true.)
     if (Wav%pe) then
-       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10_mpp, 'WAV', ex_u_atm, xmap_atm_wav)
-       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10_mpp, 'WAV', ex_v_atm, xmap_atm_wav)
+       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_u10n_mpp, 'WAV', ex_u_atm, xmap_atm_wav)
+       call fms_xgrid_get_from_xgrid(Atmos_Wave_Boundary%wavgrd_v10n_mpp, 'WAV', ex_v_atm, xmap_atm_wav)
     endif
 
   end subroutine atm_to_wave
@@ -179,6 +187,14 @@ contains
       endif
 
     enddo
+
+    call fms_xgrid_put_to_xgrid (Wav%ustktail_mpp(:,:) , 'WAV', ex_ustokes , xmap_ice_wav)
+    call fms_xgrid_put_to_xgrid (Wav%vstktail_mpp(:,:) , 'WAV', ex_vstokes , xmap_ice_wav)
+    ! -> Only on ice-PEs, bring ice information off exchange grid
+    if (Ice%pe) then
+      call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%icegrd_ustktail_mpp(:,:,:), 'OCN', ex_ustokes, xmap_ice_wav)
+      call fms_xgrid_get_from_xgrid(Ice_Wave_Boundary%icegrd_vstktail_mpp(:,:,:), 'OCN', ex_vstokes, xmap_ice_wav)
+    endif
 
     return
   end subroutine ice_to_wave

@@ -157,6 +157,8 @@ contains
       allocate( ice_ocean_boundary%stk_wavenumbers(Wav%num_stk_bands))
       ice_ocean_boundary%stk_wavenumbers = Wav%stk_wavenumbers
       ice_ocean_boundary%num_stk_bands = Wav%num_stk_bands
+      allocate( ice_ocean_boundary%ustktail(is:ie,js:je) ) ; ice_ocean_boundary%ustktail(:,:) = 0.0
+      allocate( ice_ocean_boundary%vstktail(is:ie,js:je) ) ; ice_ocean_boundary%vstktail(:,:) = 0.0
     endif
     ! Copy the stagger indication variables from the ice processors the ocean
     ! PEs and vice versa.  The defaults are large negative numbers, so the
